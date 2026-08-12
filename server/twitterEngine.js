@@ -563,19 +563,19 @@ async function executePostOnServer(token, postData, onProgress) {
     await page.goto('https://x.com/compose/post', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
     await delay(2000);
 
-    // Checa se o Twitter redirecionou para login ou conta bloqueada/suspensa
-    const authIssue = await page.evaluate(() => {
-      const href = window.location.href;
-      const text = document.body ? document.body.innerText : '';
-      if (href.includes('/i/flow/login') || href.includes('/login')) return 'Token expirado ou inválido (redirecionado para Login)';
-      if (href.includes('/account/access') || href.includes('/account/suspended')) return 'Conta suspensa ou bloqueada pelo Twitter';
-      if (text.includes('Account suspended') || text.includes('Conta suspensa') || text.includes('account has been locked')) return 'Conta suspensa ou bloqueada pelo Twitter';
-      return null;
-    });
+    const checkAuthStatus = async () => {
+      return await page.evaluate(() => {
+        const href = window.location.href;
+        const text = document.body ? document.body.innerText : '';
+        if (href.includes('/i/flow/login') || href.includes('/login')) return 'Token expirado ou inválido (redirecionado para Login)';
+        if (href.includes('/account/access') || href.includes('/account/suspended')) return 'Twitter solicitou verificação de acesso para esta conta (desafio por IP de nuvem). Abra a extensão no seu PC para publicar direto pelo seu IP!';
+        if (text.includes('Account suspended') || text.includes('Conta suspensa') || text.includes('account has been locked') || text.includes('conta foi suspensa')) return 'Conta suspensa ou bloqueada pelo Twitter';
+        return null;
+      });
+    };
 
-    if (authIssue) {
-      throw new Error(authIssue);
-    }
+    let authIssue = await checkAuthStatus();
+    if (authIssue) throw new Error(authIssue);
 
     // Captura o username da conta logada
     const currentUsername = await page.evaluate(() => {
@@ -586,10 +586,13 @@ async function executePostOnServer(token, postData, onProgress) {
     // Passo 2: Digitando texto
     onProgress(2, 'Digitando texto da publicação...', 'running');
 
-    // Aguarda o React do Twitter montar a caixa de texto do post no DOM (até 35 segundos)
+    // Aguarda o React do Twitter montar a caixa de texto do post no DOM (até 25 segundos)
     const combinedSelector = '[data-testid="tweetTextarea_0"], [data-testid="tweetTextarea_0_ariaLabel"], div[contenteditable="true"][role="textbox"], div[contenteditable="true"], [role="textbox"], [data-testid="SideNav_NewTweet_Button"]';
     
-    await page.waitForSelector(combinedSelector, { timeout: 35000 }).catch(() => {});
+    await page.waitForSelector(combinedSelector, { timeout: 25000 }).catch(() => {});
+
+    authIssue = await checkAuthStatus();
+    if (authIssue) throw new Error(authIssue);
 
     let matchedEditorSelector = null;
     const selectors = [
@@ -615,7 +618,10 @@ async function executePostOnServer(token, postData, onProgress) {
         const postBtn = document.querySelector('[data-testid="SideNav_NewTweet_Button"], a[href="/compose/post"]');
         if (postBtn) postBtn.click();
       }).catch(() => {});
-      await delay(2500);
+      await delay(2000);
+
+      authIssue = await checkAuthStatus();
+      if (authIssue) throw new Error(authIssue);
 
       for (const sel of selectors) {
         const el = await page.$(sel).catch(() => null);
@@ -628,6 +634,8 @@ async function executePostOnServer(token, postData, onProgress) {
     }
 
     if (!matchedEditorSelector) {
+      authIssue = await checkAuthStatus();
+      if (authIssue) throw new Error(authIssue);
       throw new Error('Caixa de texto da publicação não encontrada. Verifique se o token da conta é válido e está ativo.');
     }
 

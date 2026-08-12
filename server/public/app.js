@@ -154,7 +154,6 @@ function connectWebSocket() {
       }
 
       if (msg.type === 'INIT_PROGRESS_STATE') {
-        clientProgressMap.clear();
         if (msg.progressMap && Array.isArray(msg.progressMap)) {
           msg.progressMap.forEach(([cId, pData]) => {
             clientProgressMap.set(cId, pData);

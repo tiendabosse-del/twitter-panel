@@ -1123,19 +1123,30 @@ wss.on('connection', (ws, req) => {
 
           setTimeout(async () => {
             let tokenToUse = null;
+            let targetExtClient = null;
+
             if (cId.startsWith('token_')) {
               const accId = cId.replace('token_', '');
-              const acc = savedAccounts.find(a => a.id === accId);
-              if (acc) tokenToUse = acc.token;
+              const acc = savedAccounts.find(a => a.id === accId || a.token === accId);
+              if (acc) {
+                tokenToUse = acc.token;
+                targetExtClient = Array.from(clientsMap.values()).find(c =>
+                  c.ws && c.ws.readyState === WebSocket.OPEN && c.info?.account?.username && acc.username &&
+                  c.info.account.username.toLowerCase() === acc.username.toLowerCase()
+                );
+              }
             } else {
-              const client = clientsMap.get(cId);
-              if (client && client.ws.readyState === WebSocket.OPEN) {
-                client.ws.send(JSON.stringify({ type: 'EXECUTE_POST', postData: postDataForDispatch }));
-                return;
-              } else {
+              targetExtClient = clientsMap.get(cId);
+              if (!targetExtClient) {
                 const acc = savedAccounts.find(a => a.id === cId || a.username === cId);
                 if (acc) tokenToUse = acc.token;
               }
+            }
+
+            if (targetExtClient && targetExtClient.ws && targetExtClient.ws.readyState === WebSocket.OPEN) {
+              console.log(`[ws] Roteando post diretamente para a extensão ativa da conta: @${targetExtClient.info?.account?.username || cId}`);
+              targetExtClient.ws.send(JSON.stringify({ type: 'EXECUTE_POST', postData: postDataForDispatch }));
+              return;
             }
 
             if (tokenToUse) {
