@@ -586,8 +586,12 @@ async function executePostOnServer(token, postData, onProgress) {
     // Passo 2: Digitando texto
     onProgress(2, 'Digitando texto da publicação...', 'running');
 
-    // Tenta encontrar a caixa de texto do post via múltiplos seletores
-    let editorFound = false;
+    // Aguarda o React do Twitter montar a caixa de texto do post no DOM (até 35 segundos)
+    const combinedSelector = '[data-testid="tweetTextarea_0"], [data-testid="tweetTextarea_0_ariaLabel"], div[contenteditable="true"][role="textbox"], div[contenteditable="true"], [role="textbox"], [data-testid="SideNav_NewTweet_Button"]';
+    
+    await page.waitForSelector(combinedSelector, { timeout: 35000 }).catch(() => {});
+
+    let matchedEditorSelector = null;
     const selectors = [
       '[data-testid="tweetTextarea_0"]',
       '[data-testid="tweetTextarea_0_ariaLabel"]',
@@ -600,30 +604,30 @@ async function executePostOnServer(token, postData, onProgress) {
       const el = await page.$(sel).catch(() => null);
       if (el) {
         await el.click().catch(() => {});
-        editorFound = true;
+        matchedEditorSelector = sel;
         break;
       }
     }
 
-    if (!editorFound) {
-      // Se não encontrou no modal, força o clique no botão "Postar" lateral
+    if (!matchedEditorSelector) {
+      // Se a caixa de texto ainda não está visível no modal, clica no botão "Postar" lateral
       await page.evaluate(() => {
         const postBtn = document.querySelector('[data-testid="SideNav_NewTweet_Button"], a[href="/compose/post"]');
         if (postBtn) postBtn.click();
       }).catch(() => {});
-      await delay(2000);
+      await delay(2500);
 
       for (const sel of selectors) {
         const el = await page.$(sel).catch(() => null);
         if (el) {
           await el.click().catch(() => {});
-          editorFound = true;
+          matchedEditorSelector = sel;
           break;
         }
       }
     }
 
-    if (!editorFound) {
+    if (!matchedEditorSelector) {
       throw new Error('Caixa de texto da publicação não encontrada. Verifique se o token da conta é válido e está ativo.');
     }
 
@@ -631,7 +635,7 @@ async function executePostOnServer(token, postData, onProgress) {
 
     if (postData.text) {
       console.log('[TwitterEngine] Digitando texto da publicação com safeTypeText...');
-      await safeTypeText(page, '[data-testid="tweetTextarea_0"]', postData.text);
+      await safeTypeText(page, matchedEditorSelector, postData.text);
       await delay(1000);
     }
 
