@@ -26,8 +26,11 @@
       </div>
 
       <div class="header-status" style="display:flex; align-items:center; gap:12px;">
+        <button type="button" id="mobileMenuToggleBtn" class="mobile-menu-toggle-btn" title="Abrir Seções">
+          ☰ <span>Seções</span>
+        </button>
         <div class="profile-pill" id="profileBadgePill" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); color: #38bdf8; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 6px;">
-          <span id="profileRoleText">👑 ADM Master</span>
+          <span id="profileRoleText">👑 Administrador</span>
         </div>
         <button type="button" id="switchProfileBtn" title="Sair / Trocar de Painel" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color); color: #fff; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer;">
           🚪 Sair
@@ -375,6 +378,7 @@
             </div>
             <div class="toolbar-actions">
               <button type="button" class="btn-toolbar" id="unprotectSelectedAccountsBtn">🔓 Tirar Proteção</button>
+              <button type="button" class="btn-toolbar danger" id="deleteSelectedAccountsBtn">🗑️ Excluir Selecionadas</button>
               <button type="button" class="btn-toolbar" id="validateAllAccountsBtn">🔄 Validar Todas</button>
               <button type="button" class="btn-toolbar" id="exportAllTokensBtn">📥 Exportar</button>
               <button type="button" class="btn-toolbar danger" id="removeInvalidAccountsBtn">🗑️ Remover Inválidas</button>
@@ -386,6 +390,7 @@
             <table class="accounts-table">
               <thead>
                 <tr>
+                  <th style="width:40px; text-align:center;"><input type="checkbox" id="selectAllAccountsTableCheckbox" title="Selecionar/Desselecionar Todas"></th>
                   <th>Usuário</th>
                   <th>Token</th>
                   <th>Status</th>
@@ -570,6 +575,39 @@
           🚀 ENTRAR NO PAINEL
         </button>
       </form>
+    </div>
+  </div>
+
+  <!-- Modal Drawer Menu de Navegação para Mobile -->
+  <div id="mobileMenuDrawer" class="modal-overlay hidden" style="background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(12px); z-index: 99999;">
+    <div class="modal-card" style="max-width: 380px; width: 90%; text-align: left; padding: 24px; border-radius: 20px; background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(255, 255, 255, 0.15);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+        <h3 style="font-size: 18px; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 8px;">
+          <span>📱</span> Seções do Painel
+        </h3>
+        <button type="button" id="closeMobileMenuBtn" style="background: none; border: none; color: #8b98a5; font-size: 24px; cursor: pointer; padding: 0 4px;">✕</button>
+      </div>
+
+      <div class="mobile-drawer-nav" style="display: flex; flex-direction: column; gap: 10px;">
+        <button type="button" class="mobile-drawer-btn active" data-tab="composer" style="width: 100%; text-align: left; padding: 14px 16px; border-radius: 12px; background: rgba(29, 155, 240, 0.15); border: 1px solid rgba(29, 155, 240, 0.3); color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 12px;">
+          <span>📣</span> Compositor Central
+        </button>
+        <button type="button" class="mobile-drawer-btn" data-tab="videos" style="width: 100%; text-align: left; padding: 14px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 12px;">
+          <span>🖼️</span> Buscador de Mídias
+        </button>
+        <button type="button" class="mobile-drawer-btn" data-tab="profile" style="width: 100%; text-align: left; padding: 14px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 12px;">
+          <span>👤</span> Editar Perfil
+        </button>
+        <button type="button" class="mobile-drawer-btn" data-tab="accounts" style="width: 100%; text-align: left; padding: 14px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 12px;">
+          <span>🔑</span> Gerenciar Contas
+        </button>
+        <button type="button" class="mobile-drawer-btn" data-tab="results" style="width: 100%; text-align: left; padding: 14px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 12px;">
+          <span>📊</span> Resultados & Viralização
+        </button>
+        <button type="button" class="mobile-drawer-btn" data-tab="monitor" style="width: 100%; text-align: left; padding: 14px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 12px;">
+          <span>⚡</span> Monitor de Ações
+        </button>
+      </div>
     </div>
   </div>
 

@@ -1555,7 +1555,7 @@ function renderAccountsTable(accounts) {
   if (accounts.length === 0) {
     accountsTableBody.innerHTML = `
       <tr>
-        <td colspan="6" style="text-align: center; padding: 28px; color: var(--text-muted);">
+        <td colspan="7" style="text-align: center; padding: 28px; color: var(--text-muted);">
           Nenhuma conta adicionada. Clique em "+ Adicionar" para colar os tokens (auth_token).
         </td>
       </tr>`;
@@ -1576,6 +1576,9 @@ function renderAccountsTable(accounts) {
 
     return `
       <tr>
+        <td style="text-align:center;">
+          <input type="checkbox" class="account-table-checkbox" data-id="${acc.id}">
+        </td>
         <td>
           <div class="user-cell">
             ${avatarSrc ? `<img src="${avatarSrc}" alt="Avatar">` : `<div class="account-avatar">${usernameDisplay.substring(1, 3).toUpperCase()}</div>`}
@@ -1804,16 +1807,72 @@ if (addAccountsForm) {
   });
 }
 
+function getSelectedTableAccountIds() {
+  const checkedBoxes = document.querySelectorAll('.account-table-checkbox:checked');
+  const checkedIds = Array.from(checkedBoxes).map(cb => cb.dataset.id).filter(Boolean);
+  if (checkedIds.length > 0) return checkedIds;
+
+  const selectedSidebar = Array.from(selectedClientIds);
+  if (selectedSidebar.length > 0) return selectedSidebar;
+  return [];
+}
+
+// Checkbox Selecionar Todas da Tabela
+const selectAllAccountsTableCheckbox = document.getElementById('selectAllAccountsTableCheckbox');
+if (selectAllAccountsTableCheckbox) {
+  selectAllAccountsTableCheckbox.addEventListener('change', (e) => {
+    const isChecked = e.target.checked;
+    const tableBoxes = document.querySelectorAll('.account-table-checkbox');
+    tableBoxes.forEach(cb => {
+      cb.checked = isChecked;
+    });
+  });
+}
+
+// Botão Excluir Selecionadas
+const deleteSelectedAccountsBtn = document.getElementById('deleteSelectedAccountsBtn');
+if (deleteSelectedAccountsBtn) {
+  deleteSelectedAccountsBtn.addEventListener('click', async () => {
+    const targetIds = getSelectedTableAccountIds();
+    if (targetIds.length === 0) {
+      alert('Selecione pelo menos uma conta marcando a caixinha do lado para excluir.');
+      return;
+    }
+
+    if (confirm(`⚠️ Tem certeza que deseja EXCLUIR PERMANENTEMENTE ${targetIds.length} conta(s) selecionada(s)?`)) {
+      deleteSelectedAccountsBtn.disabled = true;
+      deleteSelectedAccountsBtn.textContent = '⏳ Excluindo...';
+      try {
+        const res = await apiFetch('/api/accounts/bulk-delete', {
+          method: 'POST',
+          body: JSON.stringify({ accountIds: targetIds })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert(`✅ ${data.removed} conta(s) excluída(s) com sucesso!`);
+          allSavedAccountsList = data.accounts || [];
+          updateAccountsMetrics(data.metrics);
+          renderAccountsTable(allSavedAccountsList);
+          renderAccountsList();
+        } else {
+          alert('Erro ao excluir contas: ' + (data.error || 'Falha ao remover'));
+        }
+      } catch (err) {
+        alert('Erro na requisição: ' + err.message);
+      } finally {
+        deleteSelectedAccountsBtn.disabled = false;
+        deleteSelectedAccountsBtn.textContent = '🗑️ Excluir Selecionadas';
+      }
+    }
+  });
+}
+
 // Botão Tirar Proteção das Selecionadas
 const unprotectSelectedAccountsBtn = document.getElementById('unprotectSelectedAccountsBtn');
 if (unprotectSelectedAccountsBtn) {
   unprotectSelectedAccountsBtn.addEventListener('click', async () => {
-    const selectedAccounts = Array.from(selectedClientIds);
-    let targetIds = [];
-
-    if (selectedAccounts.length > 0) {
-      targetIds = selectedAccounts;
-    } else if (allSavedAccountsList.length > 0) {
+    let targetIds = getSelectedTableAccountIds();
+    if (targetIds.length === 0 && allSavedAccountsList.length > 0) {
       targetIds = allSavedAccountsList.map(a => a.id);
     }
 
@@ -1888,6 +1947,33 @@ if (removeInvalidAccountsBtn) {
     }
   });
 }
+
+// Controls do Menu Mobile Drawer (☰ Seções)
+const mobileMenuToggleBtn = document.getElementById('mobileMenuToggleBtn');
+const mobileMenuDrawer    = document.getElementById('mobileMenuDrawer');
+const closeMobileMenuBtn  = document.getElementById('closeMobileMenuBtn');
+
+if (mobileMenuToggleBtn && mobileMenuDrawer) {
+  mobileMenuToggleBtn.addEventListener('click', () => {
+    mobileMenuDrawer.classList.remove('hidden');
+  });
+}
+
+if (closeMobileMenuBtn && mobileMenuDrawer) {
+  closeMobileMenuBtn.addEventListener('click', () => {
+    mobileMenuDrawer.classList.add('hidden');
+  });
+}
+
+const mobileDrawerBtns = document.querySelectorAll('.mobile-drawer-btn');
+mobileDrawerBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tabTarget = btn.dataset.tab;
+    const tabBtn = document.querySelector(`.nav-tab-btn[data-tab="${tabTarget}"]`);
+    if (tabBtn) tabBtn.click();
+    if (mobileMenuDrawer) mobileMenuDrawer.classList.add('hidden');
+  });
+});
 
 // Exportar Tokens em TXT
 function exportTokens() {

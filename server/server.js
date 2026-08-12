@@ -602,13 +602,42 @@ app.delete('/api/accounts/remove-invalid', (req, res) => {
   const currentAccounts = loadAccountsStore(req.accessPass);
   const filtered = currentAccounts.filter(a => a.status === 'Válido');
   saveAccountsStore(filtered, req.accessPass);
-  notifyDashboardClientList();
+  notifyDashboardClientList(req.accessPass);
 
   res.json({
     success: true,
     metrics: { total: filtered.length, valid: filtered.length, invalid: 0 },
     accounts: filtered
   });
+});
+
+app.post('/api/accounts/bulk-delete', (req, res) => {
+  try {
+    const { accountIds } = req.body;
+    if (!accountIds || !Array.isArray(accountIds) || accountIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'Nenhuma conta selecionada para exclusão.' });
+    }
+
+    const currentAccounts = loadAccountsStore(req.accessPass);
+    const toDeleteSet = new Set(accountIds);
+    const filtered = currentAccounts.filter(a => !toDeleteSet.has(a.id) && !toDeleteSet.has(a.token));
+    const removedCount = currentAccounts.length - filtered.length;
+
+    saveAccountsStore(filtered, req.accessPass);
+    notifyDashboardClientList(req.accessPass);
+
+    const validCount = filtered.filter(a => a.status === 'Válido').length;
+    const invalidCount = filtered.filter(a => a.status === 'Inválido').length;
+
+    res.json({
+      success: true,
+      removed: removedCount,
+      metrics: { total: filtered.length, valid: validCount, invalid: invalidCount },
+      accounts: filtered
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 app.post('/api/accounts/unprotect', async (req, res) => {
