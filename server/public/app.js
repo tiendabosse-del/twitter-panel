@@ -37,6 +37,82 @@ const publishBtn        = document.getElementById('publishBtn');
 
 const executionMonitor  = document.getElementById('executionMonitor');
 
+// ── Gerenciador de Sessão e Senha de Acesso (adm123 x user123) ────────────────
+function getAccessPass() {
+  return sessionStorage.getItem('accessPass') || '';
+}
+
+async function apiFetch(url, options = {}) {
+  const pass = getAccessPass();
+  const headers = options.headers ? { ...options.headers } : {};
+  headers['X-Access-Pass'] = pass;
+  if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return fetch(url, { ...options, headers });
+}
+
+const loginModalOverlay = document.getElementById('loginModalOverlay');
+const loginForm         = document.getElementById('loginForm');
+const loginPasswordInput= document.getElementById('loginPasswordInput');
+const switchProfileBtn  = document.getElementById('switchProfileBtn');
+const profileRoleText   = document.getElementById('profileRoleText');
+
+function checkLoginSession() {
+  const pass = getAccessPass();
+  if (!pass) {
+    if (loginModalOverlay) loginModalOverlay.classList.remove('hidden');
+    return false;
+  } else {
+    if (loginModalOverlay) loginModalOverlay.classList.add('hidden');
+    updateProfileBadge(pass);
+    return true;
+  }
+}
+
+function updateProfileBadge(pass) {
+  if (profileRoleText) {
+    if (pass === 'user123') {
+      profileRoleText.textContent = '👤 Usuário (user123)';
+      profileRoleText.parentElement.style.borderColor = 'rgba(74, 222, 128, 0.4)';
+      profileRoleText.parentElement.style.background = 'rgba(74, 222, 128, 0.15)';
+      profileRoleText.parentElement.style.color = '#4ade80';
+    } else {
+      profileRoleText.textContent = '👑 ADM Master (adm123)';
+      profileRoleText.parentElement.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+      profileRoleText.parentElement.style.background = 'rgba(56, 189, 248, 0.15)';
+      profileRoleText.parentElement.style.color = '#38bdf8';
+    }
+  }
+}
+
+if (loginForm) {
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const val = loginPasswordInput.value.trim();
+    if (val === 'adm123' || val === 'user123') {
+      sessionStorage.setItem('accessPass', val);
+      checkLoginSession();
+      loadAccountsManagerData();
+      if (typeof loadResultsData === 'function') loadResultsData();
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        connectWebSocket();
+      } else {
+        ws.send(JSON.stringify({ type: 'REGISTER_DASHBOARD', pass: val }));
+      }
+    } else {
+      alert('Senha incorreta! Digite "adm123" para o Administrador Master ou "user123" para o Usuário.');
+    }
+  });
+}
+
+if (switchProfileBtn) {
+  switchProfileBtn.addEventListener('click', () => {
+    sessionStorage.removeItem('accessPass');
+    location.reload();
+  });
+}
+
 // ── Conexão WebSocket com o Backend Server ───────────────────────────────────
 function connectWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -50,8 +126,8 @@ function connectWebSocket() {
       <span class="status-dot green"></span>
       <span class="status-text">Painel Conectado</span>`;
     
-    // Registra a UI do Painel no servidor
-    ws.send(JSON.stringify({ type: 'REGISTER_DASHBOARD' }));
+    // Registra a UI do Painel no servidor com a senha da sessão
+    ws.send(JSON.stringify({ type: 'REGISTER_DASHBOARD', pass: getAccessPass() }));
   };
 
   ws.onmessage = (event) => {
@@ -287,9 +363,8 @@ if (refreshResultsBtn) {
     if (icon) icon.classList.add('spin-icon');
     refreshResultsBtn.disabled = true;
     try {
-      const res = await fetch('/api/results/refresh', {
+      const res = await apiFetch('/api/results/refresh', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ period: currentSelectedPeriod })
       });
       const data = await res.json();
@@ -307,7 +382,7 @@ if (refreshResultsBtn) {
 
 async function loadResultsData(period = 'today') {
   try {
-    const res = await fetch(`/api/results?period=${period}`);
+    const res = await apiFetch(`/api/results?period=${period}`);
     const data = await res.json();
     if (data.success) {
       renderResultsDashboard(data);
@@ -1440,7 +1515,7 @@ let allSavedAccountsList = [];
 
 async function loadAccountsManagerData() {
   try {
-    const res = await fetch('/api/accounts');
+    const res = await apiFetch('/api/accounts');
     const data = await res.json();
     if (data.success) {
       allSavedAccountsList = data.accounts || [];
@@ -1684,9 +1759,8 @@ if (addAccountsForm) {
     submitAddAccountsBtn.textContent = `⏳ Validando e Adicionando ${tokenArray.length} conta(s)...`;
 
     try {
-      const res = await fetch('/api/accounts/add-tokens', {
+      const res = await apiFetch('/api/accounts/add-tokens', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tokens: tokenArray })
       });
       const data = await res.json();
@@ -1735,9 +1809,8 @@ if (unprotectSelectedAccountsBtn) {
       unprotectSelectedAccountsBtn.disabled = true;
       unprotectSelectedAccountsBtn.textContent = '⏳ Desprotegendo...';
       try {
-        const res = await fetch('/api/accounts/unprotect', {
+        const res = await apiFetch('/api/accounts/unprotect', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ accountIds: targetIds })
         });
         const data = await res.json();
@@ -1765,7 +1838,7 @@ if (validateAllAccountsBtn) {
     validateAllAccountsBtn.disabled = true;
     validateAllAccountsBtn.textContent = '⏳ Validando...';
     try {
-      const res = await fetch('/api/accounts/validate-all', { method: 'POST' });
+      const res = await apiFetch('/api/accounts/validate-all', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         allSavedAccountsList = data.accounts;
@@ -1786,7 +1859,7 @@ if (removeInvalidAccountsBtn) {
   removeInvalidAccountsBtn.addEventListener('click', async () => {
     if (!confirm('Deseja remover todas as contas marcadas como inválidas?')) return;
     try {
-      const res = await fetch('/api/accounts/remove-invalid', { method: 'DELETE' });
+      const res = await apiFetch('/api/accounts/remove-invalid', { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
         allSavedAccountsList = data.accounts;

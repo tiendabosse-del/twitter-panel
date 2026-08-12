@@ -230,49 +230,79 @@ function broadcastToDashboards(payload) {
   }
 }
 
-// ── BANCO DE DADOS DE CONTAS (accounts.json) ──────────────────────────────────
-const accountsFilePath = path.join(__dirname, 'accounts.json');
+// ── AUTENTICAÇÃO E SUPORTE A DOIS PAINÉIS (adm123 x user123) ──────────────────
+app.use((req, res, next) => {
+  req.accessPass = req.headers['x-access-pass'] || req.query.pass || (req.body && req.body.pass) || 'adm123';
+  next();
+});
 
-function loadAccountsStore() {
+app.post('/api/login', (req, res) => {
+  const { password } = req.body;
+  const cleanPass = String(password || '').trim();
+  if (cleanPass === 'adm123') {
+    return res.json({ success: true, role: 'admin', pass: 'adm123', label: '👑 Administrador (Master)' });
+  } else if (cleanPass === 'user123') {
+    return res.json({ success: true, role: 'user', pass: 'user123', label: '👤 Usuário (Painel Limpo)' });
+  } else {
+    return res.json({ success: false, error: 'Senha incorreta! Digite "adm123" ou "user123".' });
+  }
+});
+
+function getAccountsFilePath(pass) {
+  if (String(pass || '').trim() === 'user123') {
+    return path.join(__dirname, 'accounts_user.json');
+  }
+  return path.join(__dirname, 'accounts.json');
+}
+
+function getPublishedPostsFilePath(pass) {
+  if (String(pass || '').trim() === 'user123') {
+    return path.join(__dirname, 'published_posts_user.json');
+  }
+  return path.join(__dirname, 'published_posts.json');
+}
+
+function loadAccountsStore(pass = 'adm123') {
   try {
-    if (fs.existsSync(accountsFilePath)) {
-      const data = fs.readFileSync(accountsFilePath, 'utf8');
+    const fPath = getAccountsFilePath(pass);
+    if (fs.existsSync(fPath)) {
+      const data = fs.readFileSync(fPath, 'utf8');
       return JSON.parse(data);
     }
   } catch (err) {
-    console.error('Erro ao ler accounts.json:', err);
+    console.error('Erro ao ler accounts:', err);
   }
   return [];
 }
 
-function saveAccountsStore(accounts) {
+function saveAccountsStore(accounts, pass = 'adm123') {
   try {
-    fs.writeFileSync(accountsFilePath, JSON.stringify(accounts, null, 2), 'utf8');
+    const fPath = getAccountsFilePath(pass);
+    fs.writeFileSync(fPath, JSON.stringify(accounts, null, 2), 'utf8');
   } catch (err) {
-    console.error('Erro ao salvar accounts.json:', err);
+    console.error('Erro ao salvar accounts:', err);
   }
 }
 
-// ── BANCO DE DADOS DE POSTAGENS PUBLICADAS (published_posts.json) ─────────────
-const publishedPostsFilePath = path.join(__dirname, 'published_posts.json');
-
-function loadPublishedPostsStore() {
+function loadPublishedPostsStore(pass = 'adm123') {
   try {
-    if (fs.existsSync(publishedPostsFilePath)) {
-      const data = fs.readFileSync(publishedPostsFilePath, 'utf8');
+    const fPath = getPublishedPostsFilePath(pass);
+    if (fs.existsSync(fPath)) {
+      const data = fs.readFileSync(fPath, 'utf8');
       return JSON.parse(data);
     }
   } catch (err) {
-    console.error('Erro ao ler published_posts.json:', err);
+    console.error('Erro ao ler published_posts:', err);
   }
   return [];
 }
 
-function savePublishedPostsStore(posts) {
+function savePublishedPostsStore(posts, pass = 'adm123') {
   try {
-    fs.writeFileSync(publishedPostsFilePath, JSON.stringify(posts, null, 2), 'utf8');
+    const fPath = getPublishedPostsFilePath(pass);
+    fs.writeFileSync(fPath, JSON.stringify(posts, null, 2), 'utf8');
   } catch (err) {
-    console.error('Erro ao salvar published_posts.json:', err);
+    console.error('Erro ao salvar published_posts:', err);
   }
 }
 
@@ -381,7 +411,7 @@ app.post('/api/accounts/sync-detected', async (req, res) => {
     const { token, username, name, avatar, followersCount } = req.body;
     if (!token) return res.status(400).json({ success: false, error: 'Token não informado' });
 
-    const currentAccounts = loadAccountsStore();
+    const currentAccounts = loadAccountsStore(req.accessPass);
     const cleanToken = String(token).trim();
     const idx = currentAccounts.findIndex(a => a.token === cleanToken);
 
@@ -411,7 +441,7 @@ app.post('/api/accounts/sync-detected', async (req, res) => {
       currentAccounts.push(updatedObj);
     }
 
-    saveAccountsStore(currentAccounts);
+    saveAccountsStore(currentAccounts, req.accessPass);
     notifyDashboardClientList();
 
     res.json({ success: true, account: updatedObj });
@@ -422,7 +452,7 @@ app.post('/api/accounts/sync-detected', async (req, res) => {
 
 // REST Endpoints de Contas
 app.get('/api/accounts', (req, res) => {
-  const accounts = loadAccountsStore();
+  const accounts = loadAccountsStore(req.accessPass);
   const total = accounts.length;
   const valid = accounts.filter(a => a.status === 'Válido').length;
   const invalid = accounts.filter(a => a.status === 'Inválido').length;
@@ -528,7 +558,7 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
 
 app.post('/api/accounts/validate-all', async (req, res) => {
   try {
-    const currentAccounts = loadAccountsStore();
+    const currentAccounts = loadAccountsStore(req.accessPass);
     for (let acc of currentAccounts) {
       const val = await validateTokenWithTwitter(acc.token);
       acc.status = val.valid ? 'Válido' : 'Inválido';
@@ -542,7 +572,7 @@ app.post('/api/accounts/validate-all', async (req, res) => {
       }
       acc.updatedAt = new Date().toISOString();
     }
-    saveAccountsStore(currentAccounts);
+    saveAccountsStore(currentAccounts, req.accessPass);
     notifyDashboardClientList();
 
     const validCount = currentAccounts.filter(a => a.status === 'Válido').length;
@@ -559,9 +589,9 @@ app.post('/api/accounts/validate-all', async (req, res) => {
 });
 
 app.delete('/api/accounts/remove-invalid', (req, res) => {
-  const currentAccounts = loadAccountsStore();
+  const currentAccounts = loadAccountsStore(req.accessPass);
   const filtered = currentAccounts.filter(a => a.status === 'Válido');
-  saveAccountsStore(filtered);
+  saveAccountsStore(filtered, req.accessPass);
   notifyDashboardClientList();
 
   res.json({
@@ -578,7 +608,7 @@ app.post('/api/accounts/unprotect', async (req, res) => {
       return res.status(400).json({ success: false, error: 'IDs de contas não informados' });
     }
 
-    const currentAccounts = loadAccountsStore();
+    const currentAccounts = loadAccountsStore(req.accessPass);
     const updatedResults = [];
 
     for (const accId of accountIds) {
@@ -607,7 +637,7 @@ app.post('/api/accounts/unprotect', async (req, res) => {
       }
     }
 
-    saveAccountsStore(currentAccounts);
+    saveAccountsStore(currentAccounts, req.accessPass);
     notifyDashboardClientList();
 
     const validCount = currentAccounts.filter(a => a.status === 'Válido').length;
@@ -649,7 +679,7 @@ app.post('/api/media-search/bulk', async (req, res) => {
 app.get('/api/results', (req, res) => {
   try {
     const period = String(req.query.period || 'today').toLowerCase();
-    const allPosts = loadPublishedPostsStore();
+    const allPosts = loadPublishedPostsStore(req.accessPass);
 
     // Filtra pelo período selecionado
     const filteredPosts = filterPostsByPeriod(allPosts, period);
@@ -681,14 +711,14 @@ app.get('/api/results', (req, res) => {
 // Endpoint para atualizar métricas (Views, Likes, Reposts, Replies) dos posts publicados
 app.post('/api/results/refresh', async (req, res) => {
   try {
-    const allPosts = loadPublishedPostsStore();
+    const allPosts = loadPublishedPostsStore(req.accessPass);
     if (allPosts.length === 0) {
       return res.json({ success: true, updated: 0, posts: [] });
     }
 
     console.log(`[Server] Atualizando métricas ao vivo de ${allPosts.length} postagens salvas...`);
     let updatedCount = 0;
-    const accounts = loadAccountsStore();
+    const accounts = loadAccountsStore(req.accessPass);
     const validToken = accounts.find(a => a.status === 'Válido' && a.token)?.token;
 
     for (let post of allPosts) {
@@ -729,7 +759,7 @@ app.post('/api/results/refresh', async (req, res) => {
       }
     }
 
-    savePublishedPostsStore(allPosts);
+    savePublishedPostsStore(allPosts, req.accessPass);
 
     const period = String(req.body.period || 'today').toLowerCase();
     const filteredPosts = filterPostsByPeriod(allPosts, period);
