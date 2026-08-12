@@ -232,7 +232,17 @@ function broadcastToDashboards(payload) {
 
 // ── AUTENTICAÇÃO E SUPORTE A DOIS PAINÉIS (adm123 x user123) ──────────────────
 app.use((req, res, next) => {
-  req.accessPass = req.headers['x-access-pass'] || req.query.pass || (req.body && req.body.pass) || 'adm123';
+  // Rotas públicas que não requerem senha
+  if (req.path === '/api/login' || req.path === '/api/status' || !req.path.startsWith('/api/')) {
+    return next();
+  }
+
+  const pass = String(req.headers['x-access-pass'] || req.query.pass || (req.body && req.body.pass) || '').trim();
+  if (pass !== 'adm123' && pass !== 'user123') {
+    return res.status(401).json({ success: false, error: 'Acesso não autorizado. Informe a senha de acesso.' });
+  }
+
+  req.accessPass = pass;
   next();
 });
 
@@ -244,7 +254,7 @@ app.post('/api/login', (req, res) => {
   } else if (cleanPass === 'user123') {
     return res.json({ success: true, role: 'user', pass: 'user123', label: '👤 Usuário (Painel Limpo)' });
   } else {
-    return res.json({ success: false, error: 'Senha incorreta! Digite "adm123" ou "user123".' });
+    return res.status(401).json({ success: false, error: 'Senha incorreta! Digite "adm123" ou "user123".' });
   }
 });
 
@@ -981,14 +991,24 @@ wss.on('connection', (ws, req) => {
     try {
       const msg = JSON.parse(data.toString());
 
-      // 1. Registro da Interface do Painel Web
+      // 1. Registro da Interface do Painel Web (Autenticado)
       if (msg.type === 'REGISTER_DASHBOARD') {
+        const clientPass = String(msg.pass || '').trim();
+        if (clientPass !== 'adm123' && clientPass !== 'user123') {
+          ws.send(JSON.stringify({
+            type: 'AUTH_REQUIRED',
+            error: 'Senha de acesso inválida ou ausente. Faça o login primeiro.'
+          }));
+          return;
+        }
+
         isDashboard = true;
+        ws.accessPass = clientPass;
         dashboardSockets.add(ws);
         // Envia lista atual de clientes conectados para o painel
         ws.send(JSON.stringify({
           type: 'CLIENT_LIST_UPDATE',
-          clients: getConnectedClientsList()
+          clients: getConnectedClientsList(clientPass)
         }));
         // Envia estado atual persistido do monitor de atividades (F5 safe)
         ws.send(JSON.stringify({

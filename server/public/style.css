@@ -1503,3 +1503,124 @@ input[type="range"] {
 .podium-card:hover {
   transform: translateY(-3px);
 }
+
+/* ── Estilos do Portal de Login e Proteção ───────────────────────────── */
+#loginModalOverlay input:focus {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 12px var(--primary-glow) !important;
+}
+
+/* ── Otimização Responsiva e Adaptada para Mobile (Smartphones/Tablets) ── */
+@media (max-width: 768px) {
+  body {
+    padding: 10px 8px !important;
+  }
+
+  .app-container {
+    gap: 14px !important;
+  }
+
+  .main-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    padding: 14px 16px !important;
+    gap: 14px !important;
+  }
+
+  .brand {
+    justify-content: flex-start !important;
+  }
+
+  .brand-text h1 {
+    font-size: 1.1rem !important;
+  }
+
+  .header-status {
+    width: 100% !important;
+    justify-content: space-between !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+
+  .profile-pill {
+    font-size: 11px !important;
+    padding: 4px 10px !important;
+  }
+
+  .server-badge, .stats-pill {
+    padding: 4px 10px !important;
+    font-size: 0.78rem !important;
+  }
+
+  /* Abas de Navegação no Mobile com Scroll Horizontal Suave */
+  .nav-tabs-container {
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 6px !important;
+  }
+
+  .nav-tabs {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    width: max-content !important;
+    gap: 6px !important;
+  }
+
+  .nav-tab-btn {
+    padding: 8px 14px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Grid Principal no Mobile */
+  .dashboard-grid {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+
+  .panel-card {
+    padding: 16px !important;
+    border-radius: var(--radius-md) !important;
+  }
+
+  .panel-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+  }
+
+  .selection-actions {
+    width: 100% !important;
+    justify-content: space-between !important;
+  }
+
+  /* Aba Resultados (Pódio Viral no Mobile) */
+  .podium-container {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 14px !important;
+  }
+
+  .podium-card {
+    width: 100% !important;
+    min-height: auto !important;
+  }
+
+  /* Tabelas Responsivas com Scroll */
+  .table-responsive, table {
+    display: block !important;
+    width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Modais Adaptados no Mobile */
+  .modal-card {
+    width: 95% !important;
+    max-height: 90vh !important;
+    padding: 20px 16px !important;
+    border-radius: var(--radius-lg) !important;
+  }
+}

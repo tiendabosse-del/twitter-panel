@@ -58,13 +58,17 @@ const loginPasswordInput= document.getElementById('loginPasswordInput');
 const switchProfileBtn  = document.getElementById('switchProfileBtn');
 const profileRoleText   = document.getElementById('profileRoleText');
 
+const mainDashboardContainer = document.getElementById('mainDashboardContainer');
+
 function checkLoginSession() {
   const pass = getAccessPass();
-  if (!pass) {
+  if (pass !== 'adm123' && pass !== 'user123') {
     if (loginModalOverlay) loginModalOverlay.classList.remove('hidden');
+    if (mainDashboardContainer) mainDashboardContainer.classList.add('hidden');
     return false;
   } else {
     if (loginModalOverlay) loginModalOverlay.classList.add('hidden');
+    if (mainDashboardContainer) mainDashboardContainer.classList.remove('hidden');
     updateProfileBadge(pass);
     return true;
   }
@@ -90,18 +94,28 @@ if (loginForm) {
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const val = loginPasswordInput.value.trim();
-    if (val === 'adm123' || val === 'user123') {
-      localStorage.setItem('accessPass', val);
-      checkLoginSession();
-      loadAccountsManagerData();
-      if (typeof loadResultsData === 'function') loadResultsData();
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        connectWebSocket();
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: val })
+      });
+      const data = await res.json();
+      if (data.success) {
+        localStorage.setItem('accessPass', data.pass);
+        checkLoginSession();
+        loadAccountsManagerData();
+        if (typeof loadResultsData === 'function') loadResultsData();
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          connectWebSocket();
+        } else {
+          ws.send(JSON.stringify({ type: 'REGISTER_DASHBOARD', pass: data.pass }));
+        }
       } else {
-        ws.send(JSON.stringify({ type: 'REGISTER_DASHBOARD', pass: val }));
+        alert(data.error || 'Senha incorreta!');
       }
-    } else {
-      alert('Senha incorreta! Digite "adm123" para o Administrador Master ou "user123" para o Usuário.');
+    } catch (err) {
+      alert('Erro de conexão ao autenticar: ' + err.message);
     }
   });
 }
@@ -1036,8 +1050,11 @@ if (clearMonitorHistoryBottomBtn) clearMonitorHistoryBottomBtn.addEventListener(
 
 // Inicializa Conexão no carregamento da página
 window.addEventListener('DOMContentLoaded', () => {
+  if (!checkLoginSession()) return;
+
   connectWebSocket();
   loadAccountsManagerData();
+  if (typeof loadResultsData === 'function') loadResultsData();
 
   // Restaura disparo em massa do localStorage caso exista
   try {
