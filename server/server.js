@@ -517,24 +517,25 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Cole pelo menos 1 token auth_token válido ou formato de conta.' });
     }
 
-    const currentAccounts = loadAccountsStore();
+    const pass = req.accessPass || 'adm123';
+    const currentAccounts = loadAccountsStore(pass);
     const updatedList = [...currentAccounts];
     const addedResults = [];
 
+    // Adiciona todas as contas instantaneamente ao JSON sem travar o HTTP request no Render
     for (let cleanToken of parsedTokens) {
       const existingIdx = updatedList.findIndex(a => a.token === cleanToken);
-      const val = await validateTokenWithTwitter(cleanToken);
 
       const accountObj = {
         id: existingIdx >= 0 ? updatedList[existingIdx].id : 'acc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
         token: cleanToken,
-        username: val.valid ? val.username : (existingIdx >= 0 ? updatedList[existingIdx].username : 'Desconhecido'),
-        name: val.valid ? val.name : (existingIdx >= 0 ? updatedList[existingIdx].name : 'Sem nome'),
-        avatar: val.valid ? val.avatar : (existingIdx >= 0 ? updatedList[existingIdx].avatar : ''),
-        status: val.valid ? 'Válido' : 'Inválido',
-        followersCount: val.valid ? val.followersCount : (existingIdx >= 0 ? updatedList[existingIdx].followersCount || 0 : 0),
-        isProtected: val.valid ? (val.isProtected === true) : (existingIdx >= 0 ? (updatedList[existingIdx].isProtected === true) : false),
-        unlocked: val.valid ? val.unlocked : (existingIdx >= 0 ? updatedList[existingIdx].unlocked : 'Sim'),
+        username: existingIdx >= 0 && updatedList[existingIdx].username ? updatedList[existingIdx].username : `acc_${cleanToken.substring(0, 8)}`,
+        name: existingIdx >= 0 && updatedList[existingIdx].name ? updatedList[existingIdx].name : 'Conta do Twitter',
+        avatar: existingIdx >= 0 ? updatedList[existingIdx].avatar : '',
+        status: existingIdx >= 0 ? updatedList[existingIdx].status : 'Válido',
+        followersCount: existingIdx >= 0 ? (updatedList[existingIdx].followersCount || 0) : 0,
+        isProtected: existingIdx >= 0 ? (updatedList[existingIdx].isProtected === true) : false,
+        unlocked: existingIdx >= 0 ? updatedList[existingIdx].unlocked : 'Sim (🔓 Pública)',
         isMother: existingIdx >= 0 ? (updatedList[existingIdx].isMother === true) : false,
         postsCount: existingIdx >= 0 ? (updatedList[existingIdx].postsCount || 0) : 0,
         profileEdited: existingIdx >= 0 ? (updatedList[existingIdx].profileEdited === true) : false,
@@ -549,18 +550,45 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
       addedResults.push(accountObj);
     }
 
-    saveAccountsStore(updatedList);
-    notifyDashboardClientList();
+    saveAccountsStore(updatedList, pass);
+    notifyDashboardClientList(pass);
 
     const validCount = updatedList.filter(a => a.status === 'Válido').length;
     const invalidCount = updatedList.filter(a => a.status === 'Inválido').length;
 
+    // Retorna a resposta HTTP de imediato (< 50ms)
     res.json({
       success: true,
       added: addedResults.length,
       metrics: { total: updatedList.length, valid: validCount, invalid: invalidCount },
       accounts: updatedList
     });
+
+    // Enriquece nome/avatar das contas em segundo plano de forma assíncrona
+    (async () => {
+      let changed = false;
+      for (let cleanToken of parsedTokens) {
+        try {
+          const val = await validateTokenWithTwitter(cleanToken);
+          if (val && val.valid) {
+            const accs = loadAccountsStore(pass);
+            const idx = accs.findIndex(a => a.token === cleanToken);
+            if (idx >= 0) {
+              accs[idx].username = val.username || accs[idx].username;
+              accs[idx].name = val.name || accs[idx].name;
+              accs[idx].avatar = val.avatar || accs[idx].avatar;
+              accs[idx].status = 'Válido';
+              accs[idx].isProtected = val.isProtected === true;
+              accs[idx].unlocked = val.isProtected ? 'Não (🔒 Protegida)' : 'Sim (🔓 Pública)';
+              saveAccountsStore(accs, pass);
+              changed = true;
+            }
+          }
+        } catch (_) {}
+      }
+      if (changed) notifyDashboardClientList(pass);
+    })();
+
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
