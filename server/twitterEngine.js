@@ -1,4 +1,21 @@
-const puppeteer = require('puppeteer-core');
+let puppeteer;
+try {
+  puppeteer = require('puppeteer-core');
+} catch (e) {
+  if (e && e.code === 'ERR_REQUIRE_ESM') {
+    puppeteer = new Proxy({}, {
+      get(target, prop) {
+        return async (...args) => {
+          const mod = await import('puppeteer-core');
+          const p = mod.default || mod;
+          return p[prop](...args);
+        };
+      }
+    });
+  } else {
+    throw e;
+  }
+}
 const path = require('path');
 const fs = require('fs');
 
