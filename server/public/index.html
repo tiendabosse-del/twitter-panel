@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Twitter Auto Poster — Painel Central de Controle</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header Principal -->
+    <header class="main-header">
+      <div class="brand">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>Twitter Control Panel</h1>
+          <span class="sub-title">Hub Central de Automação & Múltiplas Contas</span>
+        </div>
+      </div>
+
+      <div class="header-status">
+        <div class="server-badge" id="serverBadge">
+          <span class="status-dot green"></span>
+          <span class="status-text">Painel Online</span>
+        </div>
+        <div class="stats-pill">
+          <span id="connectedCount">0</span> perfis conectados
+        </div>
+      </div>
+    </header>
+
+    <!-- Conteúdo Principal -->
+    <main class="dashboard-grid">
+      <!-- Coluna Esquerda: Contas do Twitter Vinculadas -->
+      <section class="panel-card accounts-section">
+        <div class="panel-header">
+          <div class="panel-title">
+            <h2>Contas do Twitter</h2>
+            <span class="badge-count" id="activeAccountsBadge">0 ativas</span>
+          </div>
+          <div class="selection-actions">
+            <button type="button" class="btn-text" id="selectAllBtn">Selecionar Todas</button>
+            <button type="button" class="btn-text" id="deselectAllBtn">Limpar</button>
+          </div>
+        </div>
+
+        <div class="accounts-list-container" id="accountsList">
+          <!-- Renderizado via JavaScript -->
+          <div class="empty-state">
+            <div class="empty-icon">🔑</div>
+            <h3>Nenhuma conta vinculada</h3>
+            <p>Clique abaixo para adicionar tokens (auth_token) e vincular contas do Twitter ao servidor.</p>
+          </div>
+        </div>
+
+        <div class="token-login-bar">
+          <button type="button" class="btn-token-login" id="sidebarAddAccountsBtn">+ Adicionar Contas via Token</button>
+        </div>
+      </section>
+
+      <!-- Coluna Direita: Conteúdo Principal com Abas -->
+      <section class="panel-card composer-section">
+        <!-- Navegação por Abas -->
+        <div class="tabs-nav">
+          <button type="button" class="tab-btn active" data-tab="composer">✍️ Compositor Central</button>
+          <button type="button" class="tab-btn" data-tab="videos">🖼️ Buscador de Mídias</button>
+          <button type="button" class="tab-btn" data-tab="profile">👤 Editar Perfil</button>
+          <button type="button" class="tab-btn" data-tab="accounts">🔑 Gerenciar Contas</button>
+          <button type="button" class="tab-btn" data-tab="results">📊 Resultados & Viralização</button>
+          <button type="button" class="tab-btn" data-tab="monitor">
+            ⚡ Monitor de Ações <span id="activeJobsBadge" class="badge-count hidden" style="background:var(--primary); color:#fff; font-size:10px; padding:2px 6px; border-radius:10px; margin-left:4px;">0</span>
+          </button>
+        </div>
+
+        <!-- ABA 1: COMPOSITOR CENTRAL -->
+        <div id="tabContentComposer" class="tab-pane">
+          <div class="panel-header">
+            <div class="panel-title">
+              <h2>Compositor Central de Postagem</h2>
+              <span class="target-indicator" id="targetAccountsText">Nenhuma conta selecionada</span>
+            </div>
+          </div>
+
+        <form id="postForm" class="composer-form">
+          <!-- CAMPOS DE POSTAGEM ÚNICA (PADRÃO) -->
+          <div id="singlePostComposerFields">
+            <!-- Caixa de Texto do Tweet -->
+            <div class="form-group">
+              <label for="tweetText">Texto da Publicação</label>
+              <div class="textarea-wrapper">
+                <textarea id="tweetText" placeholder="O que está acontecendo? Digite a mensagem que será enviada para as contas selecionadas..." rows="4"></textarea>
+                <div class="char-counter">
+                  <span id="charCount">0</span> / 280
+                </div>
+              </div>
+            </div>
+
+            <!-- Mídias (Fotos / Vídeos) -->
+            <div class="form-group">
+              <label>Mídias — Até 4 arquivos (Fotos / Vídeos)</label>
+              <div class="media-dropzone" id="dropZone">
+                <input type="file" id="mediaInput" accept="image/*,video/*" multiple class="file-input-hidden">
+                <div class="dropzone-content" id="dropzonePrompt">
+                  <span class="drop-icon">☁️</span>
+                  <p>Clique, arraste ou <span class="browse-link">cole (Ctrl+V)</span></p>
+                  <span class="file-hint">Até 4 fotos ou vídeos (JPG, PNG, GIF, MP4)</span>
+                </div>
+                <div class="media-grid hidden" id="mediaPreviewGrid"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- CAMPOS DE DISPARO EM MASSA (IMPORTADO DO BUSCADOR) -->
+          <div id="massPostComposerFields" class="hidden" style="margin-bottom: 24px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; background: rgba(59, 130, 246, 0.15); border:1px solid var(--primary); padding:14px 18px; border-radius:12px; margin-bottom:18px;">
+              <div>
+                <strong style="color:var(--primary); font-size:15px;">📦 Modo de Disparo em Massa Ativo</strong>
+                <p style="font-size:13px; color:var(--text-muted); margin-top:2px;">
+                  <span id="massPostCountText">0</span> postagem(ns) importada(s). Cada post selecionado abaixo será enviado para uma conta selecionada na barra lateral!
+                </p>
+              </div>
+              <button type="button" id="cancelMassModeBtn" class="btn-download" style="font-size:12px; padding:6px 12px;">❌ Voltar para Postagem Única</button>
+            </div>
+
+            <div id="massPostsListContainer" style="display:flex; flex-direction:column; gap:16px;"></div>
+          </div>
+
+          <!-- Configurações Adicionais pós-publicação (Configuração Única para Todos) -->
+          <div class="options-grid">
+            <!-- Comentário automático pós-tweet -->
+            <div class="form-group full-width">
+              <label for="commentText">
+                <span>💬 Comentário Automático no Próprio Tweet (🎲 Variação Automática Anti-Spam de Chamada para Bio Ativada)</span>
+              </label>
+              <input type="text" id="commentText" placeholder="Ex: CHECK BIO 🔞 (Cada post enviará uma variação única diferente com emojis: Full in bio 🔥, Video in bio 👇, Version full in bio...)">
+              <span style="font-size:12px; color:var(--primary); margin-top:4px; display:block;">✨ Variações automáticas ativas: gera combinações únicas de texto + emojis para evitar ban por comentários duplicados.</span>
+            </div>
+
+            <!-- Toggles de Repost, Fixar e Restringir -->
+            <div class="option-card">
+              <label class="toggle-control">
+                <input type="checkbox" id="doRepost">
+                <span class="toggle-switch"></span>
+                <span class="toggle-label">🔁 Dar Repost Automático</span>
+              </label>
+            </div>
+
+            <div class="option-card">
+              <label class="toggle-control">
+                <input type="checkbox" id="doPin">
+                <span class="toggle-switch"></span>
+                <span class="toggle-label">📌 Fixar no Perfil</span>
+              </label>
+            </div>
+
+            <div class="option-card full-width">
+              <label for="replyRestriction">🔒 Quem pode responder</label>
+              <select id="replyRestriction" class="select-input">
+                <option value="everyone">Qualquer pessoa pode responder</option>
+                <option value="verified">Somente contas verificadas</option>
+                <option value="following">Pessoas que você segue</option>
+                <option value="mentioned">Apenas pessoas que você mencionou</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Controle de Atraso entre Contas (Staggering) -->
+          <div class="stagger-section">
+            <div class="stagger-header">
+              <label for="staggerRange">⏱️ Atraso entre envios de cada conta:</label>
+              <span class="stagger-value" id="staggerValue">0 segundos (Simultâneo)</span>
+            </div>
+            <input type="range" id="staggerRange" min="0" max="60" value="0" step="5">
+            <span class="stagger-hint">Evita disparos 100% simultâneos para maior segurança das contas.</span>
+          </div>
+
+          <!-- Botão de Disparo Principal -->
+          <div class="actions-bar">
+            <button type="submit" class="btn-primary" id="publishBtn" style="color: #ffffff !important; font-weight: bold; text-shadow: 0 1px 3px rgba(0,0,0,0.6);">
+              <span class="btn-icon">🚀</span>
+              <span class="btn-text" style="color: #ffffff !important; font-weight: bold;">PUBLICAR NAS CONTAS SELECIONADAS</span>
+            </button>
+          </div>
+        </form>
+        </div><!-- Fim da Aba 1 (Compositor) -->
+
+        <!-- ABA 2: BUSCADOR DE MÍDIAS DO X (FOTOS E VÍDEOS) -->
+        <div id="tabContentVideos" class="tab-pane hidden">
+          <div class="video-finder-container">
+            <div class="video-info-box">
+              <p>Cole links do X/Twitter com fotos ou vídeos. O painel extrai as mídias e legendas em alta resolução para publicação individual ou em massa.</p>
+            </div>
+
+            <!-- Modos de Busca: Link Único vs Múltiplos Links em Massa -->
+            <div class="search-mode-tabs" style="display:flex; gap:12px; margin-bottom:18px;">
+              <button type="button" class="btn-toolbar active" id="singleSearchModeBtn">🔗 Link Único</button>
+              <button type="button" class="btn-toolbar" id="bulkSearchModeBtn">📦 Importar Links em Massa</button>
+            </div>
+
+            <!-- Formulário Busca Única -->
+            <form id="videoSearchForm" class="video-search-form">
+              <div class="form-group">
+                <label for="videoPostUrl">LINK DA POSTAGEM</label>
+                <input type="url" id="videoPostUrl" placeholder="https://x.com/usuario/status/1234567890" class="input-url">
+              </div>
+              <button type="submit" class="btn-video-search" id="searchVideoBtn">
+                <span class="btn-icon">👁️</span> Buscar mídias e legenda
+              </button>
+            </form>
+
+            <!-- Formulário Busca em Massa -->
+            <form id="bulkVideoSearchForm" class="video-search-form hidden">
+              <div class="form-group">
+                <label for="bulkPostUrls">LINKS DAS POSTAGENS (1 POR LINHA)</label>
+                <textarea id="bulkPostUrls" rows="5" placeholder="https://x.com/user1/status/1111111&#10;https://x.com/user2/status/2222222&#10;https://x.com/user3/status/3333333" class="input-url" style="width:100%; border-radius:10px; padding:12px; font-family:monospace; resize:vertical; background: rgba(0,0,0,0.3); color:#fff; border: 1px solid var(--border-color);"></textarea>
+              </div>
+              <button type="submit" class="btn-video-search" id="searchBulkVideoBtn">
+                <span class="btn-icon">⚡</span> Buscar Mídias dos Links em Massa
+              </button>
+            </form>
+
+            <!-- Card de Resultado das Mídias Encontradas (Link Único) -->
+            <div id="videoResultCard" class="video-result-card hidden">
+              <div class="author-header" id="videoAuthorHeader">
+                <img id="videoAuthorAvatar" src="" class="author-avatar" alt="Avatar">
+                <div class="author-info">
+                  <span id="videoAuthorName" class="author-name"></span>
+                  <span id="videoAuthorHandle" class="author-handle"></span>
+                </div>
+              </div>
+
+              <div class="video-caption-box">
+                <p id="videoCaptionText"></p>
+              </div>
+
+              <!-- Container/Grid de Mídias Extraídas -->
+              <div class="extracted-media-grid" id="extractedMediaGrid"></div>
+
+              <div class="video-actions">
+                <a id="downloadVideoBtn" href="#" target="_blank" download class="btn-download">
+                  ⬇️ Baixar Mídia MP4/Imagem
+                </a>
+                <button type="button" id="useVideoInComposerBtn" class="btn-import">
+                  📥 Importar para Compositor Central
+                </button>
+              </div>
+            </div>
+
+            <!-- Card de Resultado da Busca em Massa (Múltiplos Links) -->
+            <div id="bulkResultCard" class="video-result-card hidden" style="margin-top:20px;">
+              <h3 style="color:var(--primary); font-size:18px; margin-bottom:8px;">📦 Mídias & Legendas Extraídas em Massa</h3>
+              <p class="subtitle-text" style="margin-bottom:16px;">Mídias e legendas extraídas com sucesso. Clique abaixo para importar para o Compositor Central:</p>
+              <div id="bulkExtractedGrid" class="bulk-extracted-grid" style="display:flex; flex-direction:column; gap:16px;"></div>
+              <div class="video-actions" style="margin-top:20px;">
+                <button type="button" id="sendBulkToComposerBtn" class="btn-import" style="width:100%; font-size:15px; padding:14px;">
+                  📥 Importar para o Compositor Central
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div><!-- Fim da Aba 2 (Vídeos & Fotos) -->
+
+        <!-- ABA 3: EDITAR PERFIL -->
+        <div id="tabContentProfile" class="tab-pane hidden">
+          <div class="panel-header">
+            <div class="panel-title">
+              <h2>Editar Perfil do Twitter/X</h2>
+              <span class="target-indicator" id="targetProfileAccountsText">Nenhuma conta selecionada</span>
+            </div>
+          </div>
+
+          <div class="video-info-box">
+            <p>Edite a Foto de Perfil, Banner, Bio e Link de Site das contas selecionadas automaticamente pelo painel.</p>
+          </div>
+
+          <form id="profileForm" class="composer-form">
+            <!-- Foto de Perfil -->
+            <div class="form-group">
+              <label>FOTO DE PERFIL</label>
+              <div class="file-picker-row">
+                <div class="avatar-preview-box" id="avatarPreviewBox">Sem foto</div>
+                <input type="file" id="avatarInput" accept="image/*" class="file-input-hidden">
+                <button type="button" class="btn-picker" id="pickAvatarBtn">Escolher foto</button>
+              </div>
+            </div>
+
+            <!-- Banner -->
+            <div class="form-group">
+              <label>BANNER</label>
+              <div class="file-picker-row">
+                <div class="banner-preview-box" id="bannerPreviewBox">Sem banner</div>
+                <input type="file" id="bannerInput" accept="image/*" class="file-input-hidden">
+                <button type="button" class="btn-picker" id="pickBannerBtn">Escolher banner</button>
+              </div>
+            </div>
+
+            <!-- Bio -->
+            <div class="form-group">
+              <label for="bioText">BIO</label>
+              <textarea id="bioText" placeholder="Escreva sua bio aqui..." rows="3"></textarea>
+            </div>
+
+            <!-- Site Link -->
+            <div class="form-group">
+              <label for="siteLinkInput">SITE LINK</label>
+              <input type="url" id="siteLinkInput" placeholder="https://seusite.com">
+            </div>
+
+            <!-- Botão de Ação -->
+            <div class="actions-bar">
+              <button type="submit" class="btn-primary" id="saveProfileBtn">
+                <span class="btn-icon">✏️</span>
+                <span class="btn-text">EDITAR PERFIL NAS CONTAS SELECIONADAS</span>
+              </button>
+            </div>
+          </form>
+        </div><!-- Fim da Aba 3 (Editar Perfil) -->
+
+        <!-- ABA 4: GERENCIAR CONTAS (AUTENTICAÇÃO POR TOKEN) -->
+        <div id="tabContentAccounts" class="tab-pane hidden">
+          <div class="panel-header flex-between">
+            <div>
+              <h2>Contas</h2>
+              <p class="subtitle-text">Gerencie suas contas do Twitter</p>
+            </div>
+            <div class="header-actions-row">
+              <button type="button" class="btn-download" id="exportAccountsHeaderBtn">↑ Importar</button>
+              <button type="button" class="btn-primary" id="openAddAccountsModalBtn">+ Adicionar</button>
+            </div>
+          </div>
+
+          <!-- Cards de Métricas (Total, Válidas, Inválidas) -->
+          <div class="metrics-cards-grid">
+            <div class="metric-card">
+              <div class="metric-info">
+                <span class="metric-label">Total</span>
+                <span class="metric-value" id="metricTotal">0</span>
+              </div>
+              <div class="metric-icon blue">☑</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-info">
+                <span class="metric-label">Válidas</span>
+                <span class="metric-value green" id="metricValid">0</span>
+              </div>
+              <div class="metric-icon green">✔</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-info">
+                <span class="metric-label">Inválidas</span>
+                <span class="metric-value red" id="metricInvalid">0</span>
+              </div>
+              <div class="metric-icon red">✖</div>
+            </div>
+          </div>
+
+          <!-- Barra de Ferramentas / Filtros -->
+          <div class="accounts-toolbar">
+            <div class="search-input-wrapper">
+              <input type="text" id="accountsSearchInput" placeholder="Buscar por @username..." class="search-input">
+            </div>
+            <div class="toolbar-actions">
+              <button type="button" class="btn-toolbar" id="unprotectSelectedAccountsBtn">🔓 Tirar Proteção</button>
+              <button type="button" class="btn-toolbar" id="validateAllAccountsBtn">🔄 Validar Todas</button>
+              <button type="button" class="btn-toolbar" id="exportAllTokensBtn">📥 Exportar</button>
+              <button type="button" class="btn-toolbar danger" id="removeInvalidAccountsBtn">🗑️ Remover Inválidas</button>
+            </div>
+          </div>
+
+          <!-- Tabela de Contas -->
+          <div class="table-wrapper">
+            <table class="accounts-table">
+              <thead>
+                <tr>
+                  <th>Usuário</th>
+                  <th>Token</th>
+                  <th>Status</th>
+                  <th>Unlock</th>
+                  <th>Seguidores</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="accountsTableBody">
+                <!-- Preenchido via JavaScript -->
+              </tbody>
+            </table>
+          </div>
+        </div><!-- Fim da Aba 4 (Contas) -->
+
+        <!-- ABA 5: RESULTADOS & VIRALIZAÇÃO -->
+        <div id="tabContentResults" class="tab-pane hidden">
+          <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div class="panel-title">
+              <h2>📊 Desempenho & Posts Virais do Twitter</h2>
+              <span class="target-indicator" id="resultsCountBadge">0 postagens registradas</span>
+            </div>
+            
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <div class="period-filter-group" style="display:flex; background:rgba(0,0,0,0.4); padding:4px; border-radius:10px; border:1px solid var(--border-color);">
+                <button type="button" class="period-btn active" data-period="today">📅 Hoje</button>
+                <button type="button" class="period-btn" data-period="yesterday">⏮️ Ontem</button>
+                <button type="button" class="period-btn" data-period="week">📆 Esta Semana</button>
+                <button type="button" class="period-btn" data-period="month">🗓️ Este Mês</button>
+                <button type="button" class="period-btn" data-period="all">♾️ Total</button>
+              </div>
+              <button type="button" class="btn-secondary" id="refreshResultsBtn" style="display:flex; align-items:center; gap:6px; padding:8px 14px; font-size:12px; font-weight:bold;">
+                <span id="refreshResultsIcon">🔄</span> Atualizar Métricas ao Vivo
+              </button>
+            </div>
+          </div>
+
+          <!-- BANNER TOP 3 VIRAIS -->
+          <div class="viral-top-section" style="margin-top:16px;">
+            <h3 style="font-size:15px; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              <span>🏆 HIGHLIGHTS VIRALIZAÇÃO (TOP 1, TOP 2, TOP 3 MAIS VISTOS)</span>
+            </h3>
+            
+            <div class="top-podium-grid" id="topPodiumContainer" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; margin-bottom:24px;">
+              <!-- Preenchido via JS -->
+            </div>
+          </div>
+
+          <!-- TABELA COMPLETA DE POSTAGENS E MÉTRICAS -->
+          <div class="results-table-section" style="margin-top:20px;">
+            <h3 style="font-size:14px; color:var(--text-muted); margin-bottom:10px;">📋 TODAS AS POSTAGENS PUBLICADAS</h3>
+            <div class="table-responsive" style="max-height:450px; overflow-y:auto; border-radius:12px; border:1px solid var(--border-color);">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Mídia / Vídeo</th>
+                    <th>Conta</th>
+                    <th>Legenda do Post</th>
+                    <th>👁️ Views</th>
+                    <th>❤️ Likes</th>
+                    <th>🔁 Reposts</th>
+                    <th>💬 Comentários</th>
+                    <th>Data</th>
+                    <th>Link Original</th>
+                  </tr>
+                </thead>
+                <tbody id="resultsTableBody">
+                  <!-- Preenchido via JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div><!-- Fim da Aba 5 (Resultados) -->
+
+        <!-- ABA 6: MONITOR DE ATIVIDADES & AÇÕES EM ANDAMENTO -->
+        <div id="tabContentMonitor" class="tab-pane hidden">
+          <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div class="panel-title">
+              <h2>⚡ Monitor de Atividades & Progresso em Tempo Real</h2>
+              <span class="target-indicator" id="monitorActiveSummary">0 ações ativas</span>
+            </div>
+
+            <div style="display:flex; gap:10px; align-items:center;">
+              <button type="button" class="btn-download" id="clearMonitorHistoryBtn" style="font-size:12px; padding:8px 14px;">🧹 Limpar Histórico de Atividades</button>
+            </div>
+          </div>
+
+          <div class="execution-monitor" id="executionMonitorTab" style="margin-top:16px;">
+            <div class="empty-activity">
+              <span>Nenhuma atividade ou postagem em andamento no momento.</span>
+            </div>
+          </div>
+        </div><!-- Fim da Aba 6 (Monitor) -->
+      </section>
+    </main>
+
+    <!-- Seção de Progresso e Logs de Execução em Tempo Real (Rodapé) -->
+    <section class="panel-card activity-section">
+      <div class="panel-header">
+        <div class="panel-title">
+          <h2>Monitor de Atividade & Progresso em Tempo Real</h2>
+          <span class="status-indicator-live">● AO VIVO</span>
+        </div>
+        <button type="button" class="btn-download" id="clearMonitorHistoryBottomBtn" style="font-size:11px; padding:4px 10px;">🧹 Limpar Histórico</button>
+      </div>
+
+      <div class="execution-monitor" id="executionMonitor">
+        <div class="empty-activity">
+          <span>Nenhuma postagem em andamento no momento.</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Modal: Postar com Repost em Contas Mães -->
+  <div id="motherAccountsModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>👑 Postar com Repost em Contas Mães</h3>
+        <button type="button" class="btn-close-modal" id="closeMotherModalBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Selecione quais contas mães vão dar repost automático nos posts que serão publicados agora.</p>
+        <div id="motherAccountsListContainer" class="mother-accounts-list"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-download" id="skipMotherRepostBtn">Publicar sem Repost nas Mães</button>
+          <button type="button" class="btn-primary" id="confirmMotherRepostBtn">👑 Publicar com Repost nas Contas Mães</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Adicionar Contas -->
+  <div id="addAccountsModal" class="modal-overlay hidden">
+    <div class="modal-card" style="max-width: 650px; width: 95%;">
+      <div class="modal-header">
+        <h3>🔑 Adicionar Contas</h3>
+        <button type="button" class="btn-close-modal" id="closeAddAccountsModalBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc" style="font-size:13px; line-height:1.5; color:var(--text-muted); margin-bottom:12px;">
+          Cole abaixo as contas para adicionar (uma por linha). O sistema aceita <strong>tokens diretos</strong> ou o formato completo:
+          <br>
+          <code style="color:var(--primary); font-size:12px; display:inline-block; margin-top:6px; background:rgba(0,0,0,0.4); padding:6px 10px; border-radius:6px; font-family:monospace; word-break:break-all; border:1px solid var(--border-color);">
+            usuario_exemplo:senha123:email_exemplo@gmail.com:senha123:4935f4a94133184f1966f846d02acde31c87f39e
+          </code>
+          <br>
+          <span style="font-size:12px; color:var(--primary); margin-top:4px; display:inline-block;">✨ Os 40 caracteres do token final serão identificados e validados automaticamente!</span>
+        </p>
+
+        <form id="addAccountsForm">
+          <textarea id="bulkTokensInput" placeholder="Cole aqui os tokens ou o texto completo das contas (uma por linha)...&#10;&#10;Exemplo:&#10;usuario_exemplo:senha123:email_exemplo@gmail.com:senha123:4935f4a94133184f1966f846d02acde31c87f39e&#10;4935f4a94133184f1966f846d02acde31c87f39e" rows="8" class="textarea-tokens" style="min-height: 200px; width: 100%; font-family: monospace; font-size: 13px; line-height: 1.5; padding: 12px; border-radius: 10px; background: rgba(0,0,0,0.4); color: #fff; border: 1px solid var(--border-color); white-space: pre-wrap; word-break: break-all; resize: vertical;" required></textarea>
+
+          <div class="modal-actions" style="margin-top:16px;">
+            <button type="button" class="btn-download" id="cancelAddAccountsBtn">Cancelar</button>
+            <button type="submit" class="btn-primary" id="submitAddAccountsBtn">+ Adicionar e Validar Contas</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

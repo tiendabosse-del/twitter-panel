@@ -1,0 +1,12 @@
+# Node modules
+node_modules/
+server/node_modules/
+
+# Temporary uploads & logs
+server/public/uploads/*
+!server/public/uploads/.gitkeep
+*.log
+.DS_Store
+
+# Temporary scratch files
+scratch/

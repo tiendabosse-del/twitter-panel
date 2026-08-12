@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Twitter Auto Poster</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <svg viewBox="0 0 24 24" class="logo"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+      <span class="title">Auto Poster</span>
+    </header>
+
+    <div id="formSection">
+      <div class="section">
+        <label class="label">Texto do post</label>
+        <textarea id="tweetText" class="textarea" placeholder="O que está acontecendo?"></textarea>
+        <span class="char-count"><span id="charCount">0</span>/280</span>
+      </div>
+      <div class="section">
+        <label class="label">Mídia (foto ou vídeo)</label>
+        <label class="file-label">
+          <input type="file" id="mediaFile" accept="image/*,video/*" />
+          <svg viewBox="0 0 24 24" class="icon-sm"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+          <span id="fileName">Selecionar arquivo</span>
+        </label>
+      </div>
+      <div class="section">
+        <label class="label">Quem pode responder</label>
+        <select id="replyOption" class="select">
+          <option value="everyone">Todos</option>
+          <option value="verified" selected>Apenas contas verificadas</option>
+          <option value="following">Quem você segue</option>
+          <option value="mentioned">Apenas mencionados</option>
+        </select>
+      </div>
+      <div class="section">
+        <label class="label">Comentário automático após publicar</label>
+        <textarea id="commentText" class="textarea small" placeholder="Deixe vazio para não comentar…"></textarea>
+      </div>
+      <div class="section toggle-row">
+        <label class="label">Dar repost na publicação</label>
+        <label class="toggle">
+          <input type="checkbox" id="doRepost" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <button id="startBtn" class="btn btn-primary">
+        <svg viewBox="0 0 24 24" class="icon-sm"><path d="M8 5v14l11-7z"/></svg>
+        Iniciar
+      </button>
+    </div>
+
+    <div id="progressSection" class="hidden">
+      <div class="steps" id="stepsList"></div>
+      <div id="errorBox" class="error-box hidden"></div>
+      <div class="ctrl-row">
+        <button id="pauseBtn" class="btn btn-outline">
+          <svg id="pauseIcon" viewBox="0 0 24 24" class="icon-sm"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          <svg id="resumeIcon" viewBox="0 0 24 24" class="icon-sm hidden"><path d="M8 5v14l11-7z"/></svg>
+          <span id="pauseLabel">Pausar</span>
+        </button>
+        <button id="cancelBtn" class="btn btn-danger">
+          <svg viewBox="0 0 24 24" class="icon-sm"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          Cancelar
+        </button>
+      </div>
+      <button id="newPostBtn" class="btn btn-primary hidden">
+        <svg viewBox="0 0 24 24" class="icon-sm"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+        Nova publicação
+      </button>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

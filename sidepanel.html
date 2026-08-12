@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Twitter Auto Poster</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+
+  <!-- Cabeçalho fixo -->
+  <header class="app-header">
+    <svg viewBox="0 0 24 24" class="logo"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+    <span class="app-title">Auto Poster</span>
+    <div id="activeAccountChip" class="account-chip hidden">
+      <img id="chipAvatar" class="chip-avatar" src="" alt="" />
+      <span id="chipName"></span>
+    </div>
+  </header>
+
+  <!-- Banner de Sincronização com o Painel Central -->
+  <div id="centralSyncBanner" class="central-sync-banner">
+    <span class="sync-dot"></span> Painel Central: Connected (localhost:3000)
+  </div>
+
+  <!-- Abas -->
+  <nav class="tab-bar">
+    <button class="tab active" data-tab="post">
+      <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+      Publicar
+    </button>
+    <button class="tab" data-tab="accounts">
+      <svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+      Contas
+    </button>
+    <button class="tab" data-tab="profile">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
+      Perfil
+    </button>
+    <button class="tab" data-tab="videos">
+      <svg viewBox="0 0 24 24"><path d="M17 10.5V7a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1v-3.5l4 4v-11l-4 4z"/></svg>
+      Vídeos
+    </button>
+    <button class="tab" data-tab="agent">
+      <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+      Agente
+    </button>
+  </nav>
+
+  <!-- ABA: PUBLICAR -->
+  <div id="tab-post" class="tab-content">
+
+    <div id="formSection">
+
+      <div class="field">
+        <label class="label">Texto do post</label>
+        <textarea id="tweetText" class="textarea" placeholder="O que está acontecendo?" rows="4"></textarea>
+        <div class="char-row"><span id="charCount">0</span>/280</div>
+      </div>
+
+      <div class="field">
+        <label class="label">Mídia — até 4 arquivos (foto/vídeo)</label>
+        <div class="file-drop" id="fileDrop">
+          <input type="file" id="mediaFile" accept="image/*,video/*" multiple />
+          <div id="filePrompt" class="file-prompt">
+            <svg viewBox="0 0 24 24" class="upload-icon"><path d="M19.35 10.04A7.49 7.49 0 0012 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 000 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+            <span>Clique, arraste ou <strong>cole (Ctrl+V)</strong></span>
+            <span class="file-hint">Até 4 fotos/vídeos</span>
+          </div>
+          <div id="mediaPreview" class="media-preview hidden"></div>
+        </div>
+        <button id="clearMedia" class="btn-clear hidden">✕ Remover todas as mídias</button>
+      </div>
+
+      <div class="field">
+        <label class="label">Quem pode responder</label>
+        <select id="replyOption" class="select">
+          <option value="everyone">Todos</option>
+          <option value="verified" selected>Apenas contas verificadas</option>
+          <option value="following">Quem você segue</option>
+          <option value="mentioned">Apenas mencionados</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label class="label">Comentário automático após publicar</label>
+        <textarea id="commentText" class="textarea" placeholder="Deixe vazio para não comentar…" rows="2"></textarea>
+      </div>
+
+      <div class="field row-field">
+        <label class="label">Dar repost na publicação</label>
+        <label class="toggle">
+          <input type="checkbox" id="doRepost" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="field row-field">
+        <label class="label">Fixar publicação no perfil</label>
+        <label class="toggle">
+          <input type="checkbox" id="doPin" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Toggle de agendamento -->
+      <div class="field row-field">
+        <label class="label">Agendar publicação</label>
+        <label class="toggle">
+          <input type="checkbox" id="doSchedule" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Seção de agendamento (oculta por padrão) -->
+      <div id="scheduleSection" class="hidden">
+        <div class="field">
+          <label class="label" style="color:#1d9bf0;">🗓 Data e horário da publicação</label>
+          <input type="datetime-local" id="scheduleTime" class="input-field" style="color:#e7e9ea;background:#0c1525;border-color:#1d4f7a;" />
+        </div>
+        <button id="scheduleBtn" class="btn btn-schedule">
+          <svg viewBox="0 0 24 24"><path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z"/></svg>
+          Adicionar à fila
+        </button>
+      </div>
+
+      <!-- Lista de posts agendados -->
+      <div id="scheduledListWrapper" class="hidden">
+        <div class="scheduled-header">
+          <span class="scheduled-header-title">📅 Publicações agendadas</span>
+          <span id="scheduledCount" class="scheduled-count">0</span>
+        </div>
+        <div id="scheduledList" class="scheduled-list"></div>
+      </div>
+
+      <button id="startBtn" class="btn btn-primary">
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        Iniciar agora
+      </button>
+
+    </div>
+
+    <div id="progressSection" class="hidden">
+
+      <div id="stepsList" class="steps-list"></div>
+
+      <div id="errorBox" class="error-box hidden"></div>
+
+      <div id="ctrlRow" class="ctrl-row">
+        <button id="pauseBtn" class="btn btn-outline">
+          <svg id="pauseIcon" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          <svg id="resumeIcon" viewBox="0 0 24 24" class="hidden"><path d="M8 5v14l11-7z"/></svg>
+          <span id="pauseLabel">Pausar</span>
+        </button>
+        <button id="cancelBtn" class="btn btn-danger">
+          <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          Cancelar
+        </button>
+      </div>
+
+      <button id="newPostBtn" class="btn btn-primary hidden">
+        <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+        Nova publicação
+      </button>
+
+    </div>
+
+  </div>
+
+  <!-- ABA: CONTAS -->
+  <div id="tab-accounts" class="tab-content hidden">
+
+    <p class="accounts-hint">
+      Abra o Twitter/X no Chrome e clique em <strong>Detectar conta</strong> para adicionar.
+    </p>
+
+    <button id="detectBtn" class="btn btn-primary">
+      <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+      Detectar conta ativa do Twitter
+    </button>
+
+    <div id="accountsList" class="accounts-list"></div>
+
+    <div id="accountToast" class="toast hidden"></div>
+
+    <div class="login-divider">— ou entre com uma nova conta —</div>
+
+    <button id="toggleLoginBtn" class="btn btn-outline">
+      <svg viewBox="0 0 24 24"><path d="M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z"/></svg>
+      Entrar agora
+    </button>
+
+    <div id="loginForm" class="hidden">
+      <div class="login-info-box">
+        <p>Informe usuário/e-mail e senha da conta.</p>
+        <p>Se a conta tiver <strong>autenticação em duas etapas (2FA)</strong>, cole abaixo a <strong>chave secreta do autenticador</strong>. A extensão gera o código automaticamente via <strong>2fa.live</strong> e preenche o login sozinha.</p>
+      </div>
+      <div class="field">
+        <label class="label">Usuário, e-mail ou telefone</label>
+        <input type="text" id="loginUser" class="input-field" placeholder="Usuário, e-mail ou telefone" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label class="label">Senha</label>
+        <input type="password" id="loginPass" class="input-field" placeholder="Senha da conta" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label class="label">Chave secreta 2FA <span style="color:#71767b;font-weight:400;">(opcional)</span></label>
+        <input type="text" id="login2FA" class="input-field" placeholder="Chave secreta do autenticador" autocomplete="off" />
+        <span class="field-hint">Usada para gerar o código de verificação automaticamente. Deixe em branco se a conta não usa 2FA.</span>
+      </div>
+      <button id="loginBtn" class="btn btn-primary">
+        <svg viewBox="0 0 24 24"><path d="M11 7L9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z"/></svg>
+        Acessar Twitter
+      </button>
+      <div id="loginStatusBox" class="toast hidden" style="margin-top:8px;"></div>
+    </div>
+
+  </div>
+
+  <!-- ABA: PERFIL -->
+  <div id="tab-profile" class="tab-content hidden">
+
+    <p class="accounts-hint">
+      Edite a bio e o site do seu perfil Twitter/X automaticamente.
+    </p>
+
+    <button id="toggleProfileFormBtn" class="btn btn-primary">
+      <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+      Editar perfil
+    </button>
+
+    <div id="profileForm" class="hidden">
+      <div class="field">
+        <label class="label">Foto de perfil</label>
+        <div class="profile-image-picker">
+          <div id="avatarPreviewWrap" class="avatar-preview-wrap">
+            <img id="avatarPreviewImg" class="hidden" alt="Foto de perfil" />
+            <span id="avatarPreviewPlaceholder">Sem foto</span>
+          </div>
+          <div class="profile-image-buttons">
+            <button id="avatarPickBtn" type="button" class="btn btn-outline">Escolher foto</button>
+            <button id="avatarClearBtn" type="button" class="btn-clear hidden">✕ Remover</button>
+          </div>
+          <input type="file" id="avatarFileInput" accept="image/*" class="hidden" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="label">Banner</label>
+        <div class="profile-banner-picker">
+          <div id="bannerPreviewWrap" class="banner-preview-wrap">
+            <img id="bannerPreviewImg" class="hidden" alt="Banner" />
+            <span id="bannerPreviewPlaceholder">Sem banner</span>
+          </div>
+          <div class="profile-image-buttons">
+            <button id="bannerPickBtn" type="button" class="btn btn-outline">Escolher banner</button>
+            <button id="bannerClearBtn" type="button" class="btn-clear hidden">✕ Remover</button>
+          </div>
+          <input type="file" id="bannerFileInput" accept="image/*" class="hidden" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="label">Bio</label>
+        <textarea id="profileBio" class="textarea" rows="3" placeholder="Escreva sua bio aqui…"></textarea>
+      </div>
+      <div class="field">
+        <label class="label">Site Link</label>
+        <input type="text" id="profileSite" class="input-field" placeholder="https://seusite.com" />
+      </div>
+      <button id="editProfileBtn" class="btn btn-primary">
+        <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        EDITAR BIO
+      </button>
+    </div>
+
+    <div id="profileStatusBox" class="toast hidden"></div>
+
+  </div>
+
+  <!-- ABA: VIDEOS -->
+  <div id="tab-videos" class="tab-content hidden">
+
+    <p class="accounts-hint">
+      Cole o link de uma postagem do X/Twitter que contenha vídeo. A extensão busca a melhor qualidade disponível para download.
+    </p>
+
+    <div class="field">
+      <label class="label">Link da postagem</label>
+      <input type="text" id="videoLinkInput" class="input-field" placeholder="https://x.com/usuario/status/1234567890" autocomplete="off" />
+    </div>
+
+    <button id="videoFetchBtn" class="btn btn-primary">
+      <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+      Buscar vídeo
+    </button>
+
+    <div id="videoPreviewBox" class="video-preview-box hidden">
+      <div class="video-thumb-wrap">
+        <img id="videoThumb" alt="Prévia do vídeo" />
+      </div>
+      <div id="videoQualityLabel" class="video-quality-label"></div>
+      <div id="videoCaptionPreview" class="video-caption-preview"></div>
+
+      <div class="video-actions">
+        <button id="videoWithCaptionBtn" class="btn btn-primary">
+          📝 Baixar vídeo + usar legenda
+        </button>
+        <button id="videoOnlyBtn" class="btn btn-outline">
+          🎬 Baixar somente o vídeo
+        </button>
+        <button id="videoDownloadOnlyBtn" class="btn btn-outline">
+          💾 Somente download
+        </button>
+      </div>
+    </div>
+
+    <div id="videoToast" class="toast hidden" style="margin-top:8px;"></div>
+
+  </div>
+
+  <!-- ABA: AGENTE IA -->
+  <div id="tab-agent" class="tab-content hidden agent-tab-content">
+
+    <div class="agent-hint">
+      <strong>🤖 Agente de Agendamento</strong><br>
+      Preencha o texto e mídia na aba <em>Publicar</em> e me diga quando agendar.<br>
+      <span style="color:#71767b;font-size:11px;">Ex: "agende de 5 em 5 minutos das 21:00 até as 22:00"</span>
+    </div>
+
+    <!-- Opções do agente -->
+    <div class="agent-options">
+      <div class="row-field" style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div class="label" style="color:#e7e9ea;">Postagem nodetect</div>
+          <div class="field-hint" style="margin-top:2px;">Adiciona um caractere invisível único em cada post agendado para evitar erro de postagem duplicada.</div>
+        </div>
+        <label class="toggle" style="flex-shrink:0;margin-left:10px;">
+          <input type="checkbox" id="agentNodetect" />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div id="agentMessages" class="agent-messages"></div>
+
+    <div class="agent-input-row">
+      <textarea id="agentInput" class="agent-textarea" placeholder="Me diga como agendar os posts…" rows="2"></textarea>
+      <button id="agentSendBtn" class="agent-send-btn" title="Enviar">
+        <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </div>
+
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

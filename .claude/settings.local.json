@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -c twitterEngine.js)",
+      "Bash(netstat -ano)",
+      "Bash(powershell -NoProfile -Command \"Get-Process -Id 14096 | Select-Object Id,ProcessName,Path,StartTime | Format-List\")",
+      "Bash(powershell -NoProfile -Command \"Stop-Process -Id 14096 -Force\")",
+      "Bash(node server.js)",
+      "Bash(powershell -NoProfile -Command \"Get-Process -Id 29436 -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path,StartTime | Format-List; Get-CimInstance Win32_Process -Filter \\\\\"ProcessId=29436\\\\\" | Select-Object ProcessId,ParentProcessId,CommandLine | Format-List\")",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\\\"ProcessId=28584\\\\\" | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List\")",
+      "Bash(node -e ' *)",
+      "Bash(node -c server.js)",
+      "Bash(powershell -NoProfile -Command \"Stop-Process -Id 29436 -Force\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -X POST http://localhost:3000/api/accounts/validate-all -H \"Content-Type: application/json\")",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\\\"ProcessId=23284\\\\\" | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate | Format-List\")",
+      "Bash(curl -s -m 900 -X POST http://localhost:3000/api/accounts/validate-all -H \"Content-Type: application/json\")",
+      "Bash(curl -s http://localhost:3000/api/accounts)",
+      "Bash(node -c app.js)",
+      "Bash(curl -s -X POST http://localhost:3000/api/accounts/acc_1786468902450_pyuzf/toggle-mother)",
+      "Bash(curl -s -X POST http://localhost:3000/api/accounts/acc_1786468902450_pyuzf/toggle-mother -o /tmp/toggle1.json -w \"HTTP:%{http_code}\\\\n\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s -X POST http://localhost:3000/api/accounts/add-tokens -H \"Content-Type: application/json\" -d '{\"tokens\":[\"4935f4a94133184f1966f846d02acde31c87f39e\"]}' -o /tmp/addtok.json -w \"HTTP:%{http_code}\\\\n\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/accounts/add-tokens -H 'Content-Type: application/json' -d '{\"tokens\":[\"4935f4a94133184f1966f846d02acde31c87f39e\"]}' -o 'C:\\\\Users\\\\Pichau\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Pichau-Desktop-twitter-extension-twitter-extension\\\\a28947df-c1f9-4ed4-b878-069fd826e4ba\\\\scratchpad/addtok.json' -w 'HTTP:%{http_code}\\\\n')",
+      "Bash(curl -s -X POST http://localhost:3000/api/accounts/add-tokens -H \"Content-Type: application/json\" -d '{\"tokens\":[\"4935f4a94133184f1966f846d02acde31c87f39e\"]}')",
+      "Bash(powershell -NoProfile -Command \"Stop-Process -Id 9296 -Force\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/accounts/acc_1786468902450_pyuzf/toggle-mother -o /tmp/fix1.json -w \"HTTP:%{http_code}\\\\n\")"
+    ]
+  }
+}
