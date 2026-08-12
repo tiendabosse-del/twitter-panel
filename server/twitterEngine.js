@@ -505,8 +505,22 @@ async function executePostOnServer(token, postData, onProgress) {
 
     // Passo 1: Abrindo compositor
     onProgress(1, 'Abrindo compositor do Twitter...', 'running');
-    await page.goto('https://x.com/compose/post', { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await delay(3000);
+    await page.goto('https://x.com/compose/post', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+    await delay(2000);
+
+    // Checa se o Twitter redirecionou para login ou conta bloqueada/suspensa
+    const authIssue = await page.evaluate(() => {
+      const href = window.location.href;
+      const text = document.body ? document.body.innerText : '';
+      if (href.includes('/i/flow/login') || href.includes('/login')) return 'Token expirado ou inválido (redirecionado para Login)';
+      if (href.includes('/account/access') || href.includes('/account/suspended')) return 'Conta suspensa ou bloqueada pelo Twitter';
+      if (text.includes('Account suspended') || text.includes('Conta suspensa') || text.includes('account has been locked')) return 'Conta suspensa ou bloqueada pelo Twitter';
+      return null;
+    });
+
+    if (authIssue) {
+      throw new Error(authIssue);
+    }
 
     // Captura o username da conta logada
     const currentUsername = await page.evaluate(() => {
@@ -516,9 +530,48 @@ async function executePostOnServer(token, postData, onProgress) {
 
     // Passo 2: Digitando texto
     onProgress(2, 'Digitando texto da publicação...', 'running');
-    const editorSelector = '[data-testid="tweetTextarea_0"]';
-    await page.waitForSelector(editorSelector, { timeout: 30000 });
-    await page.click(editorSelector);
+
+    // Tenta encontrar a caixa de texto do post via múltiplos seletores
+    let editorFound = false;
+    const selectors = [
+      '[data-testid="tweetTextarea_0"]',
+      '[data-testid="tweetTextarea_0_ariaLabel"]',
+      'div[contenteditable="true"][role="textbox"]',
+      'div[contenteditable="true"]',
+      '[role="textbox"]'
+    ];
+
+    for (const sel of selectors) {
+      const el = await page.$(sel).catch(() => null);
+      if (el) {
+        await el.click().catch(() => {});
+        editorFound = true;
+        break;
+      }
+    }
+
+    if (!editorFound) {
+      // Se não encontrou no modal, força o clique no botão "Postar" lateral
+      await page.evaluate(() => {
+        const postBtn = document.querySelector('[data-testid="SideNav_NewTweet_Button"], a[href="/compose/post"]');
+        if (postBtn) postBtn.click();
+      }).catch(() => {});
+      await delay(2000);
+
+      for (const sel of selectors) {
+        const el = await page.$(sel).catch(() => null);
+        if (el) {
+          await el.click().catch(() => {});
+          editorFound = true;
+          break;
+        }
+      }
+    }
+
+    if (!editorFound) {
+      throw new Error('Caixa de texto da publicação não encontrada. Verifique se o token da conta é válido e está ativo.');
+    }
+
     await delay(500);
 
     if (postData.text) {
