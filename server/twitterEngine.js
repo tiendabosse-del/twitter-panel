@@ -470,6 +470,53 @@ async function extractBulkLinksData(linkUrls) {
   return results;
 }
 
+// Digita texto com suporte universal a Emojis (UTF-16), zero-width spaces e ativação de React/Draft.js
+async function safeTypeText(page, selector, text) {
+  if (!text) return true;
+
+  const typed = await page.evaluate(({ sel, txt }) => {
+    let el = null;
+    if (sel) el = document.querySelector(sel);
+    if (!el) {
+      el = document.querySelector('[data-testid="tweetTextarea_0"]') ||
+           document.querySelector('[data-testid="tweetTextarea_0_ariaLabel"]') ||
+           document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+           document.querySelector('div[contenteditable="true"]') ||
+           document.querySelector('[role="textbox"]');
+    }
+
+    if (!el) return false;
+
+    el.focus();
+
+    // 1. Tenta execCommand('insertText') - insere Emojis e ativa eventos React/Draft.js
+    try {
+      const ok = document.execCommand('insertText', false, txt);
+      if (ok && el.textContent && el.textContent.length > 0) return true;
+    } catch (_) {}
+
+    // 2. Fallback: atribuição com InputEvent
+    try {
+      el.textContent = txt;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    } catch (_) {}
+
+    return false;
+  }, { sel: selector, txt: text }).catch(() => false);
+
+  if (!typed) {
+    // Fallback secundário: limpa emojis complexos e digita caracteres puros
+    const plainText = text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '');
+    if (plainText) {
+      await page.keyboard.type(plainText, { delay: 5 }).catch(() => {});
+    }
+  }
+
+  return true;
+}
+
 // ── Executa Fluxo de Postagem Efetivo (8 Passos) ──────────────────────────────
 async function executePostOnServer(token, postData, onProgress) {
   const cleanToken = String(token || '').trim();
@@ -575,7 +622,8 @@ async function executePostOnServer(token, postData, onProgress) {
     await delay(500);
 
     if (postData.text) {
-      await page.keyboard.type(postData.text, { delay: 15 });
+      console.log('[TwitterEngine] Digitando texto da publicação com safeTypeText...');
+      await safeTypeText(page, '[data-testid="tweetTextarea_0"]', postData.text);
       await delay(1000);
     }
 
@@ -913,7 +961,7 @@ function getRandomBioComment(baseComment = '') {
             const replyArea = await page.$('[data-testid="tweetTextarea_0"]');
             if (replyArea) {
               await replyArea.click();
-              await page.keyboard.type(dynamicComment, { delay: 15 });
+              await safeTypeText(page, '[data-testid="tweetTextarea_0"]', dynamicComment);
               await delay(1000);
 
               await page.evaluate(() => {
