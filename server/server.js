@@ -477,35 +477,55 @@ app.get('/api/accounts', (req, res) => {
 function parseInputTokens(input) {
   if (!input) return [];
   const rawList = Array.isArray(input) ? input : String(input).split(/[\r\n]+/);
-  const extractedTokens = [];
+  const items = [];
+  const seenTokens = new Set();
 
-  for (let item of rawList) {
-    const line = String(item).trim();
+  for (let rawItem of rawList) {
+    const line = String(rawItem).trim();
     if (!line) continue;
 
+    let token = null;
+    let username = null;
+
     if (line.includes(':')) {
-      const parts = line.split(':');
-      const lastPart = parts[parts.length - 1].trim();
-      const hexMatch = lastPart.match(/([a-f0-9]{40})/i);
-      if (hexMatch) {
-        extractedTokens.push(hexMatch[1].toLowerCase());
-        continue;
+      const parts = line.split(':').map(p => p.trim());
+      // 1. Procura qual parte contém os 40 caracteres hexadecimal do auth_token
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const hexMatch = parts[i].match(/([a-f0-9]{40})/i);
+        if (hexMatch) {
+          token = hexMatch[1].toLowerCase();
+          break;
+        }
+      }
+
+      // 2. Se a primeira parte não for e-mail e nem o token hex, ela é o @username da conta!
+      if (parts[0] && !parts[0].includes('@') && !parts[0].match(/^[a-f0-9]{40}$/i)) {
+        username = parts[0].replace(/^@/, '').trim();
       }
     }
 
-    const generalHexMatch = line.match(/([a-f0-9]{40})/i);
-    if (generalHexMatch) {
-      extractedTokens.push(generalHexMatch[1].toLowerCase());
-      continue;
+    if (!token) {
+      const generalHexMatch = line.match(/([a-f0-9]{40})/i);
+      if (generalHexMatch) {
+        token = generalHexMatch[1].toLowerCase();
+      } else {
+        const cleanToken = line.replace(/[^a-f0-9]/gi, '');
+        if (cleanToken.length >= 32) {
+          token = cleanToken.toLowerCase();
+        }
+      }
     }
 
-    const cleanToken = line.replace(/[^a-f0-9]/gi, '');
-    if (cleanToken.length >= 32) {
-      extractedTokens.push(cleanToken.toLowerCase());
+    if (token && !seenTokens.has(token)) {
+      seenTokens.add(token);
+      items.push({
+        token: token,
+        username: username || null
+      });
     }
   }
 
-  return Array.from(new Set(extractedTokens));
+  return items;
 }
 
 app.post('/api/accounts/add-tokens', async (req, res) => {
@@ -523,14 +543,23 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
     const addedResults = [];
 
     // Adiciona todas as contas instantaneamente ao JSON sem travar o HTTP request no Render
-    for (let cleanToken of parsedTokens) {
+    for (let item of parsedTokens) {
+      const cleanToken = item.token;
+      const parsedUsername = item.username;
       const existingIdx = updatedList.findIndex(a => a.token === cleanToken);
+
+      const usernameToUse = parsedUsername
+        || (existingIdx >= 0 && updatedList[existingIdx].username && !updatedList[existingIdx].username.startsWith('acc_') ? updatedList[existingIdx].username : null)
+        || `acc_${cleanToken.substring(0, 8)}`;
+
+      const nameToUse = (parsedUsername && parsedUsername !== usernameToUse) ? parsedUsername
+        : (existingIdx >= 0 && updatedList[existingIdx].name && updatedList[existingIdx].name !== 'Conta do Twitter' ? updatedList[existingIdx].name : (usernameToUse.startsWith('acc_') ? 'Conta do Twitter' : usernameToUse));
 
       const accountObj = {
         id: existingIdx >= 0 ? updatedList[existingIdx].id : 'acc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
         token: cleanToken,
-        username: existingIdx >= 0 && updatedList[existingIdx].username ? updatedList[existingIdx].username : `acc_${cleanToken.substring(0, 8)}`,
-        name: existingIdx >= 0 && updatedList[existingIdx].name ? updatedList[existingIdx].name : 'Conta do Twitter',
+        username: usernameToUse,
+        name: nameToUse,
         avatar: existingIdx >= 0 ? updatedList[existingIdx].avatar : '',
         status: existingIdx >= 0 ? updatedList[existingIdx].status : 'Válido',
         followersCount: existingIdx >= 0 ? (updatedList[existingIdx].followersCount || 0) : 0,
@@ -567,7 +596,8 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
     // Enriquece nome/avatar das contas em segundo plano de forma assíncrona
     (async () => {
       let changed = false;
-      for (let cleanToken of parsedTokens) {
+      for (let item of parsedTokens) {
+        const cleanToken = item.token;
         try {
           const val = await validateTokenWithTwitter(cleanToken);
           if (val && val.valid) {
