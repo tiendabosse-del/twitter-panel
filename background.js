@@ -127,7 +127,7 @@ async function connectToCentralDashboard() {
 
   // Recupera URL do servidor do painel (padrão: ws://localhost:3000)
   const store = await chrome.storage.local.get(['central_server_url', 'active_twitter_account', 'browser_profile_name']);
-  const serverUrl = store.central_server_url || 'ws://localhost:3000';
+  const serverUrl = store.central_server_url || 'wss://twitter-panel.onrender.com';
   if (store.active_twitter_account) activeAccountInfo = store.active_twitter_account;
   const profileName = store.browser_profile_name || 'Navegador';
 

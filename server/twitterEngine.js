@@ -474,7 +474,7 @@ async function extractBulkLinksData(linkUrls) {
 async function safeTypeText(page, selector, text) {
   if (!text) return true;
 
-  const typed = await page.evaluate(({ sel, txt }) => {
+  const success = await page.evaluate(({ sel, txt }) => {
     let el = null;
     if (sel) el = document.querySelector(sel);
     if (!el) {
@@ -486,16 +486,28 @@ async function safeTypeText(page, selector, text) {
     }
 
     if (!el) return false;
-
     el.focus();
 
-    // 1. Tenta execCommand('insertText') - insere Emojis e ativa eventos React/Draft.js
+    // 1. Simula Evento de Paste (Cole) com DataTransfer - É o método mais confiável no Draft.js/Twitter no Linux!
+    try {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.setData('text/plain', txt);
+      const pasteEvent = new ClipboardEvent('paste', {
+        clipboardData: dataTransfer,
+        bubbles: true,
+        cancelable: true
+      });
+      el.dispatchEvent(pasteEvent);
+      if (el.textContent && el.textContent.length > 0) return true;
+    } catch (_) {}
+
+    // 2. ExecCommand insertText
     try {
       const ok = document.execCommand('insertText', false, txt);
       if (ok && el.textContent && el.textContent.length > 0) return true;
     } catch (_) {}
 
-    // 2. Fallback: atribuição com InputEvent
+    // 3. Fallback DOM direto
     try {
       el.textContent = txt;
       el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: txt }));
@@ -503,18 +515,10 @@ async function safeTypeText(page, selector, text) {
       return true;
     } catch (_) {}
 
-    return false;
+    return true;
   }, { sel: selector, txt: text }).catch(() => false);
 
-  if (!typed) {
-    // Fallback secundário: limpa emojis complexos e digita caracteres puros
-    const plainText = text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '');
-    if (plainText) {
-      await page.keyboard.type(plainText, { delay: 5 }).catch(() => {});
-    }
-  }
-
-  return true;
+  return success;
 }
 
 // ── Executa Fluxo de Postagem Efetivo (8 Passos) ──────────────────────────────
@@ -532,6 +536,10 @@ async function executePostOnServer(token, postData, onProgress) {
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
         '--disable-blink-features=AutomationControlled',
         '--window-size=1280,800'
       ]
