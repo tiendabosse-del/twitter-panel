@@ -39,7 +39,7 @@ const executionMonitor  = document.getElementById('executionMonitor');
 
 // ── Gerenciador de Sessão e Senha de Acesso (adm123 x user123) ────────────────
 function getAccessPass() {
-  return sessionStorage.getItem('accessPass') || '';
+  return localStorage.getItem('accessPass') || '';
 }
 
 async function apiFetch(url, options = {}) {
@@ -91,7 +91,7 @@ if (loginForm) {
     e.preventDefault();
     const val = loginPasswordInput.value.trim();
     if (val === 'adm123' || val === 'user123') {
-      sessionStorage.setItem('accessPass', val);
+      localStorage.setItem('accessPass', val);
       checkLoginSession();
       loadAccountsManagerData();
       if (typeof loadResultsData === 'function') loadResultsData();
@@ -108,7 +108,7 @@ if (loginForm) {
 
 if (switchProfileBtn) {
   switchProfileBtn.addEventListener('click', () => {
-    sessionStorage.removeItem('accessPass');
+    localStorage.removeItem('accessPass');
     location.reload();
   });
 }

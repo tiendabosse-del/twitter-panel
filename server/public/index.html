@@ -549,28 +549,30 @@
     </div>
   </div>
 
-  <!-- Modal de Login / Escolha de Painel -->
-  <div id="loginModalOverlay" class="modal-overlay hidden" style="background: rgba(0, 0, 0, 0.88); backdrop-filter: blur(14px); z-index: 999999;">
-    <div class="modal-card" style="max-width: 440px; width: 92%; border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: 0 25px 60px rgba(0,0,0,0.9); text-align: center; padding: 32px 24px; border-radius: 16px;">
-      <div style="font-size: 48px; margin-bottom: 12px;">🔒</div>
-      <h2 style="font-size: 22px; font-weight: bold; color: #fff; margin-bottom: 8px;">Painel de Controle X / Twitter</h2>
-      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 24px; line-height: 1.5;">
-        Digite a senha para acessar seu ambiente de automação:
+  <!-- Tela Completa de Portal de Login -->
+  <div id="loginModalOverlay" style="position: fixed; inset: 0; background: radial-gradient(circle at center, #1e293b 0%, #0b0f19 100%); z-index: 9999999; display: flex; align-items: center; justify-content: center; padding: 20px;" class="hidden">
+    <div style="max-width: 440px; width: 100%; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0 30px 70px rgba(0,0,0,0.9); text-align: center; padding: 40px 28px; border-radius: 24px;">
+      <div style="width: 72px; height: 72px; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 20px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px auto; font-size: 32px;">
+        🔑
+      </div>
+      <h2 style="font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 8px; letter-spacing: -0.5px;">Portal de Acesso X</h2>
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 28px; line-height: 1.5;">
+        Entre com sua Senha de Acesso para carregar o seu painel de controle.
       </p>
 
       <form id="loginForm">
-        <div style="margin-bottom: 20px; text-align: left;">
-          <label style="font-size: 11px; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 6px;">🔑 SENHA DE ACESSO:</label>
-          <input type="password" id="loginPasswordInput" placeholder="Digite adm123 ou user123..." style="width: 100%; padding: 14px 16px; border-radius: 10px; background: rgba(0,0,0,0.5); border: 1px solid var(--border-color); color: #fff; font-size: 15px; outline: none;" required autofocus />
+        <div style="margin-bottom: 22px; text-align: left;">
+          <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); display: block; margin-bottom: 8px; letter-spacing: 0.5px;">SENHA DE ACESSO:</label>
+          <input type="password" id="loginPasswordInput" placeholder="Digite adm123 ou user123..." style="width: 100%; padding: 16px 18px; border-radius: 12px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-size: 15px; outline: none; transition: border-color 0.2s;" required autofocus />
         </div>
 
-        <button type="submit" class="btn-primary" style="width: 100%; padding: 14px; font-size: 15px; font-weight: bold; border-radius: 10px; justify-content: center;">
-          🚀 Entrar no Painel
+        <button type="submit" class="btn-primary" style="width: 100%; padding: 16px; font-size: 15px; font-weight: 800; border-radius: 12px; justify-content: center; box-shadow: 0 4px 15px rgba(56, 189, 248, 0.3);">
+          🚀 ENTRAR NO PAINEL
         </button>
 
-        <div style="margin-top: 20px; font-size: 12px; color: var(--text-muted); background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; text-align: left; line-height: 1.6; border: 1px solid rgba(255,255,255,0.05);">
+        <div style="margin-top: 24px; font-size: 12px; color: var(--text-muted); background: rgba(255,255,255,0.03); padding: 14px; border-radius: 12px; text-align: left; line-height: 1.6; border: 1px solid rgba(255,255,255,0.06);">
           💡 <strong>Ambientes Disponíveis:</strong><br>
-          • <strong style="color:#38bdf8;">adm123</strong>: Administrador Master (com seus dados reais)<br>
+          • <strong style="color:#38bdf8;">adm123</strong>: Administrador Master (suas 121 postagens e dados)<br>
           • <strong style="color:#4ade80;">user123</strong>: Usuário (Ambiente novo e limpo)
         </div>
       </form>
