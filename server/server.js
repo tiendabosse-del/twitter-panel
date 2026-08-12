@@ -809,8 +809,8 @@ app.post('/api/results/refresh', async (req, res) => {
           updatedCount++;
         }
 
-        // Se views continuarem zeradas ou baixas, utiliza raspagem direta do DOM via Puppeteer
-        if (!post.metrics || Number(post.metrics.views || 0) === 0) {
+        // Se views forem 0 ou se a API retornar valor menor que a página real, faz raspagem direta do DOM do Twitter
+        if (!post.metrics || Number(post.metrics.views || 0) === 0 || Number(post.metrics.likes || 0) === 0) {
           const domMetrics = await twitterEngine.scrapeRealMetricsFromDOM(post.tweetUrl, validToken);
           if (domMetrics) {
             post.metrics = {

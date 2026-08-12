@@ -1530,12 +1530,22 @@ async function scrapeRealMetricsFromDOM(tweetUrl, token) {
     browser = await puppeteer.launch({
       executablePath: getChromeExecutable(),
       headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled'
+      ]
     });
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
+    // 1. Abre a página inicial do x.com primeiro para estabelecer o domínio dos cookies
+    await page.goto('https://x.com', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    await delay(1000);
 
     if (cleanToken && cleanToken.length > 15) {
       const expirationDate = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
@@ -1545,21 +1555,50 @@ async function scrapeRealMetricsFromDOM(tweetUrl, token) {
       );
     }
 
+    // 2. Navega diretamente para o tweet
     await page.goto(tweetUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-    await page.waitForSelector('article[data-testid="tweet"]', { timeout: 12000 }).catch(() => {});
-    await delay(1200);
+    await page.waitForSelector('article[data-testid="tweet"]', { timeout: 15000 }).catch(() => {});
+    await delay(2000);
 
     const rawMetrics = await page.evaluate(() => {
       const article = document.querySelector('article[data-testid="tweet"]');
       if (!article) return null;
-      const text = article.innerText;
+      const text = article.innerText || '';
 
       let viewsText = '';
+
+      // 1. Link /analytics ou bloco de métricas do próprio perfil
       const analyticsLink = article.querySelector('a[href*="/analytics"]');
-      if (analyticsLink) {
+      if (analyticsLink && analyticsLink.textContent.trim()) {
         viewsText = analyticsLink.textContent.trim();
       }
 
+      // 2. Elementos app-text-transition-container
+      if (!viewsText) {
+        const textTransitionContainers = Array.from(article.querySelectorAll('[data-testid="app-text-transition-container"]'));
+        for (const container of textTransitionContainers) {
+          const txt = container.textContent.trim();
+          const parentTxt = (container.parentElement?.parentElement?.textContent || '').toLowerCase();
+          if (txt && (parentTxt.includes('view') || parentTxt.includes('visualiza') || parentTxt.includes('vistas'))) {
+            viewsText = txt;
+            break;
+          }
+        }
+      }
+
+      // 3. Procura por links ou elementos contendo texto de Views/Visualizações
+      if (!viewsText) {
+        const elements = Array.from(article.querySelectorAll('a, span, div'));
+        for (const el of elements) {
+          const t = el.textContent.trim();
+          if (/^[\d\.,]+\s*(?:K|M)?\s*(?:Views|Visualizações|vistas)$/i.test(t)) {
+            viewsText = t;
+            break;
+          }
+        }
+      }
+
+      // Métricas de engajamento (Likes, Retweets, Replies)
       const likeBtn = article.querySelector('[data-testid="like"], [data-testid="unlike"]');
       const likesText = likeBtn ? likeBtn.textContent.trim() : '';
 
@@ -1578,7 +1617,7 @@ async function scrapeRealMetricsFromDOM(tweetUrl, token) {
 
     let viewsVal = parseTwitterNumber(rawMetrics.viewsText);
     if (viewsVal === 0) {
-      const vm = rawMetrics.fullText.match(/([\d\.,]+(?:\s*[KM])?)\s*(?:Views|Visualizações|vistas)/i);
+      const vm = rawMetrics.fullText.match(/([\d\.,]+\s*(?:K|M)?)\s*(?:Views|Visualizações|vistas)/i);
       if (vm) viewsVal = parseTwitterNumber(vm[1]);
     }
 
