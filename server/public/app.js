@@ -77,12 +77,12 @@ function checkLoginSession() {
 function updateProfileBadge(pass) {
   if (profileRoleText) {
     if (pass === 'user123') {
-      profileRoleText.textContent = '👤 Usuário (user123)';
+      profileRoleText.textContent = '👤 Usuário';
       profileRoleText.parentElement.style.borderColor = 'rgba(74, 222, 128, 0.4)';
       profileRoleText.parentElement.style.background = 'rgba(74, 222, 128, 0.15)';
       profileRoleText.parentElement.style.color = '#4ade80';
     } else {
-      profileRoleText.textContent = '👑 ADM Master (adm123)';
+      profileRoleText.textContent = '👑 Administrador';
       profileRoleText.parentElement.style.borderColor = 'rgba(56, 189, 248, 0.4)';
       profileRoleText.parentElement.style.background = 'rgba(56, 189, 248, 0.15)';
       profileRoleText.parentElement.style.color = '#38bdf8';
@@ -216,7 +216,7 @@ function renderAccountCard(acc) {
 
 // ── Renderiza Lista de Contas/Navegadores ────────────────────────────────────
 function renderAccountsList() {
-  const accountsToRender = allSavedAccountsList.length > 0 ? allSavedAccountsList : connectedClients;
+  const accountsToRender = allSavedAccountsList;
 
   if (connectedCount) connectedCount.textContent = accountsToRender.length;
   if (activeAccountsBadge) activeAccountsBadge.textContent = `${accountsToRender.length} conectadas`;

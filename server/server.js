@@ -854,6 +854,8 @@ app.post('/api/accounts/:id/toggle-mother', (req, res) => {
     acc.updatedAt = new Date().toISOString();
     saveAccountsStore(currentAccounts);
     notifyDashboardClientList();
+    saveAccountsStore(currentAccounts, req.accessPass);
+    notifyDashboardClientList(req.accessPass);
 
     const validCount = currentAccounts.filter(a => a.status === 'Válido').length;
     const invalidCount = currentAccounts.filter(a => a.status === 'Inválido').length;
@@ -869,44 +871,43 @@ app.post('/api/accounts/:id/toggle-mother', (req, res) => {
   }
 });
 
-function getConnectedClientsList() {
+function getConnectedClientsList(pass = 'adm123') {
   const list = [];
   const now = Date.now();
-  const savedAccounts = loadAccountsStore();
+  const savedAccounts = loadAccountsStore(pass);
 
-  // 1. Contas de extensões ativas em tempo real
-  for (const [clientId, client] of clientsMap.entries()) {
-    const wsOpen = client.ws && client.ws.readyState === WebSocket.OPEN;
-    const recentHeartbeat = client.lastSeen && (now - client.lastSeen < 30000);
-    const isOnline = wsOpen || recentHeartbeat;
-
-    if (isOnline) {
+  // 1. Contas salvas via token auth_token no banco do ambiente específico (pass)
+  for (const acc of savedAccounts) {
+    if (acc.status === 'Válido') {
       list.push({
-        clientId: clientId,
-        account: client.info?.account || { username: 'Desconhecido', avatar: '' },
-        browserProfile: client.info?.browserProfile || 'Navegador',
-        extensionVersion: client.info?.extensionVersion || '3.1.0',
+        clientId: acc.id || ('token_' + acc.token),
+        account: { username: acc.username, name: acc.name, avatar: acc.avatar },
+        browserProfile: 'Token (auth_token)',
+        extensionVersion: '3.1.0',
         isOnline: true,
-        lastStatus: client.status || 'idle',
-        connectedAt: client.connectedAt
+        token: acc.token,
+        lastStatus: 'idle',
+        connectedAt: acc.updatedAt
       });
     }
   }
 
-  // 2. Contas salvas via token auth_token
-  for (const acc of savedAccounts) {
-    if (acc.status === 'Válido') {
-      const alreadyInList = list.some(l => l.account?.username?.toLowerCase() === acc.username?.toLowerCase());
-      if (!alreadyInList) {
+  // 2. Apenas no ambiente ADM Master incluímos extensões locais registradas
+  if (pass === 'adm123') {
+    for (const [clientId, client] of clientsMap.entries()) {
+      const wsOpen = client.ws && client.ws.readyState === WebSocket.OPEN;
+      const recentHeartbeat = client.lastSeen && (now - client.lastSeen < 30000);
+      const isOnline = wsOpen || recentHeartbeat;
+
+      if (isOnline && !list.some(l => l.clientId === clientId)) {
         list.push({
-          clientId: 'token_' + acc.id,
-          account: { username: acc.username, avatar: acc.avatar },
-          browserProfile: 'Token (auth_token)',
+          clientId: clientId,
+          account: client.info?.account || { username: 'Desconhecido', avatar: '' },
+          browserProfile: client.info?.browserProfile || 'Navegador',
           extensionVersion: '3.1.0',
           isOnline: true,
-          token: acc.token,
-          lastStatus: 'idle',
-          connectedAt: acc.updatedAt
+          lastStatus: client.status || 'idle',
+          connectedAt: client.connectedAt
         });
       }
     }
@@ -915,23 +916,28 @@ function getConnectedClientsList() {
   return list;
 }
 
-function notifyDashboardClientList() {
-  broadcastToDashboards({
+function notifyDashboardClientList(pass = 'adm123') {
+  const payload = JSON.stringify({
     type: 'CLIENT_LIST_UPDATE',
-    clients: getConnectedClientsList()
+    clients: getConnectedClientsList(pass)
+  });
+  dashboardSockets.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN && (ws.accessPass === pass || (!ws.accessPass && pass === 'adm123'))) {
+      ws.send(payload);
+    }
   });
 }
 
 // Incrementa o contador de posts publicados por uma conta (identificada por id ou token)
-function bumpAccountPostCount(idOrToken) {
+function bumpAccountPostCount(idOrToken, pass = 'adm123') {
   if (!idOrToken) return;
-  const currentAccounts = loadAccountsStore();
+  const currentAccounts = loadAccountsStore(pass);
   const acc = currentAccounts.find(a => a.id === idOrToken || a.token === idOrToken);
   if (!acc) return;
+
   acc.postsCount = (acc.postsCount || 0) + 1;
-  acc.updatedAt = new Date().toISOString();
-  saveAccountsStore(currentAccounts);
-  notifyDashboardClientList();
+  saveAccountsStore(currentAccounts, pass);
+  notifyDashboardClientList(pass);
 }
 
 // Marca que o perfil de uma conta foi editado com sucesso (identificada por id ou token)
