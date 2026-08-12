@@ -331,29 +331,68 @@ const tabPaneProfile   = document.getElementById('tabContentProfile');
 const tabPaneAccounts  = document.getElementById('tabContentAccounts');
 const tabPaneResults   = document.getElementById('tabContentResults');
 
+function switchTab(tab) {
+  const tabBtns = document.querySelectorAll('.tab-btn');
+  const tabPaneComposer  = document.getElementById('tabContentComposer');
+  const tabPaneVideos    = document.getElementById('tabContentVideos');
+  const tabPaneProfile   = document.getElementById('tabContentProfile');
+  const tabPaneAccounts  = document.getElementById('tabContentAccounts');
+  const tabPaneResults   = document.getElementById('tabContentResults');
+
+  tabBtns.forEach(b => {
+    if (b.dataset.tab === tab) {
+      b.classList.add('active');
+    } else {
+      b.classList.remove('active');
+    }
+  });
+
+  const mobileDrawerBtns = document.querySelectorAll('.mobile-drawer-btn');
+  mobileDrawerBtns.forEach(b => {
+    if (b.dataset.tab === tab) {
+      b.style.background = 'rgba(29, 155, 240, 0.2)';
+      b.style.borderColor = 'rgba(29, 155, 240, 0.4)';
+    } else {
+      b.style.background = 'rgba(255, 255, 255, 0.04)';
+      b.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+    }
+  });
+
+  if (tabPaneComposer) tabPaneComposer.classList.add('hidden');
+  if (tabPaneVideos) tabPaneVideos.classList.add('hidden');
+  if (tabPaneProfile) tabPaneProfile.classList.add('hidden');
+  if (tabPaneAccounts) tabPaneAccounts.classList.add('hidden');
+  if (tabPaneResults) tabPaneResults.classList.add('hidden');
+
+  let activePane = null;
+  if (tab === 'composer' && tabPaneComposer) activePane = tabPaneComposer;
+  if (tab === 'videos' && tabPaneVideos) activePane = tabPaneVideos;
+  if (tab === 'profile' && tabPaneProfile) activePane = tabPaneProfile;
+  if (tab === 'accounts' && tabPaneAccounts) {
+    activePane = tabPaneAccounts;
+    loadAccountsManagerData();
+  }
+  if (tab === 'results' && tabPaneResults) {
+    activePane = tabPaneResults;
+    loadResultsData(currentSelectedPeriod);
+  }
+  if (tab === 'monitor') {
+    activePane = tabPaneComposer;
+    const monitorEl = document.getElementById('executionMonitor');
+    if (monitorEl) monitorEl.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  if (activePane) {
+    activePane.classList.remove('hidden');
+    if (tab !== 'monitor') {
+      activePane.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+}
+
 tabBtns.forEach(btn => {
   btn.addEventListener('click', () => {
-    tabBtns.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-
-    const tab = btn.dataset.tab;
-    if (tabPaneComposer) tabPaneComposer.classList.add('hidden');
-    if (tabPaneVideos) tabPaneVideos.classList.add('hidden');
-    if (tabPaneProfile) tabPaneProfile.classList.add('hidden');
-    if (tabPaneAccounts) tabPaneAccounts.classList.add('hidden');
-    if (tabPaneResults) tabPaneResults.classList.add('hidden');
-
-    if (tab === 'composer' && tabPaneComposer) tabPaneComposer.classList.remove('hidden');
-    if (tab === 'videos' && tabPaneVideos) tabPaneVideos.classList.remove('hidden');
-    if (tab === 'profile' && tabPaneProfile) tabPaneProfile.classList.remove('hidden');
-    if (tab === 'accounts' && tabPaneAccounts) {
-      tabPaneAccounts.classList.remove('hidden');
-      loadAccountsManagerData();
-    }
-    if (tab === 'results' && tabPaneResults) {
-      tabPaneResults.classList.remove('hidden');
-      loadResultsData(currentSelectedPeriod);
-    }
+    switchTab(btn.dataset.tab);
   });
 });
 
@@ -1969,8 +2008,7 @@ const mobileDrawerBtns = document.querySelectorAll('.mobile-drawer-btn');
 mobileDrawerBtns.forEach(btn => {
   btn.addEventListener('click', () => {
     const tabTarget = btn.dataset.tab;
-    const tabBtn = document.querySelector(`.nav-tab-btn[data-tab="${tabTarget}"]`);
-    if (tabBtn) tabBtn.click();
+    switchTab(tabTarget);
     if (mobileMenuDrawer) mobileMenuDrawer.classList.add('hidden');
   });
 });
