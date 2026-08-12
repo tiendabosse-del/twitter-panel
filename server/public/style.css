@@ -1538,40 +1538,50 @@ input[type="range"] {
   cursor: pointer;
 }
 
-/* ── Otimização Responsiva e Adaptada para Mobile (Smartphones/Tablets) ── */
+/* ── Otimização Completa & Escala Proporcional para Celulares (Mobile) ──── */
 html, body {
   overflow-x: hidden;
   max-width: 100vw;
 }
 
 @media (max-width: 768px) {
-  .mobile-menu-toggle-btn {
-    display: inline-flex !important;
-  }
-
   body {
     padding: 8px 6px !important;
+    font-size: 13px !important;
   }
 
   .app-container {
-    gap: 12px !important;
+    gap: 10px !important;
     width: 100% !important;
     max-width: 100vw !important;
   }
 
+  /* Header Compacto */
   .main-header {
     flex-direction: column !important;
     align-items: stretch !important;
-    padding: 12px 14px !important;
-    gap: 12px !important;
+    padding: 10px 12px !important;
+    gap: 10px !important;
+    border-radius: var(--radius-md) !important;
   }
 
-  .brand {
-    justify-content: flex-start !important;
+  .logo-icon {
+    width: 34px !important;
+    height: 34px !important;
+    border-radius: 8px !important;
+  }
+
+  .logo-icon svg {
+    width: 20px !important;
+    height: 20px !important;
   }
 
   .brand-text h1 {
-    font-size: 1.1rem !important;
+    font-size: 1.05rem !important;
+  }
+
+  .sub-title {
+    font-size: 0.72rem !important;
   }
 
   .header-status {
@@ -1581,47 +1591,42 @@ html, body {
     gap: 6px !important;
   }
 
-  .profile-pill {
+  .profile-pill, .server-badge, .stats-pill, #switchProfileBtn, .mobile-menu-toggle-btn {
+    padding: 4px 8px !important;
     font-size: 11px !important;
-    padding: 4px 10px !important;
+    border-radius: 12px !important;
   }
 
-  .server-badge, .stats-pill {
-    padding: 4px 10px !important;
-    font-size: 0.78rem !important;
+  .mobile-menu-toggle-btn {
+    display: inline-flex !important;
   }
 
-  /* Abas de Navegação no Mobile com Scroll Horizontal Suave */
-  .nav-tabs-container {
-    width: 100% !important;
+  /* Abas Superiores no Mobile */
+  .tabs-nav {
+    display: flex !important;
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: 6px !important;
-  }
-
-  .nav-tabs {
-    display: flex !important;
-    flex-wrap: nowrap !important;
-    width: max-content !important;
     gap: 6px !important;
+    padding-bottom: 4px !important;
   }
 
-  .nav-tab-btn {
-    padding: 8px 14px !important;
+  .tab-btn {
+    padding: 8px 12px !important;
     font-size: 12px !important;
     white-space: nowrap !important;
     flex-shrink: 0 !important;
+    border-radius: 10px !important;
   }
 
   /* Grid Principal no Mobile */
   .dashboard-grid {
     grid-template-columns: 1fr !important;
-    gap: 14px !important;
+    gap: 12px !important;
     width: 100% !important;
   }
 
   .panel-card {
-    padding: 14px !important;
+    padding: 12px 14px !important;
     border-radius: var(--radius-md) !important;
     width: 100% !important;
     box-sizing: border-box !important;
@@ -1630,34 +1635,95 @@ html, body {
   .panel-header {
     flex-direction: column !important;
     align-items: flex-start !important;
-    gap: 10px !important;
+    gap: 8px !important;
+    margin-bottom: 12px !important;
+    padding-bottom: 8px !important;
   }
 
-  .selection-actions {
-    width: 100% !important;
-    justify-content: space-between !important;
+  .panel-title h2 {
+    font-size: 1rem !important;
+  }
+
+  /* Botões de Ação e Formulários */
+  button, .btn-primary, .btn-download, .btn-import, .btn-toolbar, .btn-picker, .btn-token-login {
+    padding: 9px 12px !important;
+    font-size: 12px !important;
+    border-radius: 10px !important;
+  }
+
+  .composer-form {
+    gap: 12px !important;
+  }
+
+  .form-group label {
+    font-size: 10px !important;
+    margin-bottom: 4px !important;
+  }
+
+  input[type="text"], input[type="password"], textarea, select {
+    padding: 10px 12px !important;
+    font-size: 13px !important;
+    border-radius: 8px !important;
+  }
+
+  .dropzone {
+    padding: 16px 12px !important;
+    border-radius: var(--radius-md) !important;
+  }
+
+  .dropzone-prompt p {
+    font-size: 12px !important;
+  }
+
+  /* Métricas em Linha Única no Celular */
+  .metrics-cards-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 6px !important;
+  }
+
+  .metric-card {
+    padding: 8px !important;
+    border-radius: 10px !important;
+  }
+
+  .metric-label {
+    font-size: 10px !important;
+  }
+
+  .metric-value {
+    font-size: 1.1rem !important;
+  }
+
+  .metric-icon {
+    display: none !important;
+  }
+
+  /* Toolbar e Barra de Ações em Matriz no Mobile */
+  .accounts-toolbar {
+    flex-direction: column !important;
+    gap: 8px !important;
   }
 
   .toolbar-actions {
-    display: flex !important;
-    flex-wrap: wrap !important;
-    gap: 8px !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 6px !important;
     width: 100% !important;
   }
 
   .btn-toolbar {
-    flex: 1 1 calc(50% - 8px) !important;
+    width: 100% !important;
     text-align: center !important;
     justify-content: center !important;
-    font-size: 12px !important;
-    padding: 8px 10px !important;
+    font-size: 11px !important;
+    padding: 8px 6px !important;
   }
 
   /* Aba Resultados (Pódio Viral no Mobile) */
   .podium-container {
     display: flex !important;
     flex-direction: column !important;
-    gap: 14px !important;
+    gap: 12px !important;
   }
 
   .podium-card {
@@ -1665,19 +1731,30 @@ html, body {
     min-height: auto !important;
   }
 
-  /* Tabelas Responsivas com Scroll */
+  /* Tabela de Contas Responsiva */
   .table-wrapper, .table-responsive, table {
     display: block !important;
     width: 100% !important;
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
+    border-radius: 10px !important;
   }
 
-  /* Modais Adaptados no Mobile */
+  .accounts-table th, .accounts-table td {
+    padding: 8px 6px !important;
+    font-size: 11px !important;
+  }
+
+  .user-cell img {
+    width: 24px !important;
+    height: 24px !important;
+  }
+
+  /* Modais Compactos */
   .modal-card {
-    width: 95% !important;
-    max-height: 90vh !important;
-    padding: 20px 16px !important;
-    border-radius: var(--radius-lg) !important;
+    width: 94% !important;
+    max-height: 88vh !important;
+    padding: 16px 14px !important;
+    border-radius: 16px !important;
   }
 }
