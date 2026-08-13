@@ -2091,6 +2091,10 @@ if (exportAllTokensBtn) exportAllTokensBtn.addEventListener('click', exportToken
 if (exportAccountsHeaderBtn) exportAccountsHeaderBtn.addEventListener('click', exportTokens);
 
 window.addEventListener('DOMContentLoaded', () => {
+  checkLoginSession();
   connectWebSocket();
   loadAccountsManagerData();
 });
+
+// Executa imediatamente para evitar tela preta
+checkLoginSession();
