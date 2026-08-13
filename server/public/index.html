@@ -113,15 +113,21 @@
 
             <!-- Mídias (Fotos / Vídeos) -->
             <div class="form-group">
-              <label>Mídias — Até 4 arquivos (Fotos / Vídeos)</label>
+              <label>Mídias (Fotos / Vídeos)</label>
               <div class="media-dropzone" id="dropZone">
                 <input type="file" id="mediaInput" accept="image/*,video/*" multiple class="file-input-hidden">
                 <div class="dropzone-content" id="dropzonePrompt">
                   <span class="drop-icon">☁️</span>
                   <p>Clique, arraste ou <span class="browse-link">cole (Ctrl+V)</span></p>
-                  <span class="file-hint">Até 4 fotos ou vídeos (JPG, PNG, GIF, MP4)</span>
+                  <span class="file-hint">Selecione mídias ou múltiplos vídeos para Disparo em Massa</span>
                 </div>
                 <div class="media-grid hidden" id="mediaPreviewGrid"></div>
+              </div>
+              <div style="margin-top:10px;">
+                <button type="button" class="btn-import" id="importBulkLocalVideosBtn" style="font-size:12px; padding:8px 14px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); color: #38bdf8; border-radius:8px; cursor:pointer;">
+                  📂 Importar Vários Vídeos do PC (Disparo em Massa)
+                </button>
+                <input type="file" id="bulkLocalVideoInput" accept="video/*,image/*" multiple class="file-input-hidden">
               </div>
             </div>
           </div>

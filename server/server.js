@@ -34,8 +34,8 @@ const upload = multer({ storage });
 // Servir arquivos estáticos do painel dashboard
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API Endpoint: Upload de Mídias pelo Painel
-app.post('/api/upload-media', upload.array('files', 4), (req, res) => {
+// API Endpoint: Upload de Mídias pelo Painel (suporta até 100 arquivos para disparo em massa)
+app.post('/api/upload-media', upload.array('files', 100), (req, res) => {
   try {
     const files = req.files || [];
     const fileUrls = files.map(f => {
@@ -594,27 +594,34 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
       accounts: updatedList
     });
 
-    // Enriquece nome/avatar das contas em segundo plano de forma assíncrona
+    // Enriquece nome/avatar das contas em segundo plano de forma assíncrona.
+    // IMPORTANTE: precisa atualizar o status mesmo quando a validação vier
+    // inválida/suspensa — senão a conta fica presa para sempre no nome
+    // provisório (acc_XXXXXXXX) e status "Válido" otimista definidos acima,
+    // mesmo sendo uma conta suspensa ou com token inválido.
     (async () => {
       let changed = false;
       for (let item of parsedTokens) {
         const cleanToken = item.token;
         try {
           const val = await validateTokenWithTwitter(cleanToken);
+          const accs = loadAccountsStore(pass);
+          const idx = accs.findIndex(a => a.token === cleanToken);
+          if (idx < 0) continue;
+
           if (val && val.valid) {
-            const accs = loadAccountsStore(pass);
-            const idx = accs.findIndex(a => a.token === cleanToken);
-            if (idx >= 0) {
-              accs[idx].username = val.username || accs[idx].username;
-              accs[idx].name = val.name || accs[idx].name;
-              accs[idx].avatar = val.avatar || accs[idx].avatar;
-              accs[idx].status = 'Válido';
-              accs[idx].isProtected = val.isProtected === true;
-              accs[idx].unlocked = val.isProtected ? 'Não (🔒 Protegida)' : 'Sim (🔓 Pública)';
-              saveAccountsStore(accs, pass);
-              changed = true;
-            }
+            accs[idx].username = val.username || accs[idx].username;
+            accs[idx].name = val.name || accs[idx].name;
+            accs[idx].avatar = val.avatar || accs[idx].avatar;
+            accs[idx].status = 'Válido';
+            accs[idx].isProtected = val.isProtected === true;
+            accs[idx].unlocked = val.isProtected ? 'Não (🔒 Protegida)' : 'Sim (🔓 Pública)';
+          } else {
+            accs[idx].status = (val && val.status === 'Suspensa') ? 'Suspensa' : 'Inválido';
+            if (val && val.unlocked) accs[idx].unlocked = val.unlocked;
           }
+          saveAccountsStore(accs, pass);
+          changed = true;
         } catch (_) {}
       }
       if (changed) notifyDashboardClientList(pass);
@@ -1049,6 +1056,24 @@ function bumpAccountPostCount(idOrToken, pass = 'adm123') {
   notifyDashboardClientList(pass);
 }
 
+// Atualiza o status de uma conta (ex: 'Suspensa') quando isso é detectado durante
+// uma postagem — sem essa função, o código que chamava markAccountStatus() lançava
+// um erro (função inexistente) sempre que uma conta suspensa era detectada, o que
+// podia derrubar o processo do servidor (unhandled rejection) e também explicava
+// por que contas suspensas nunca ficavam marcadas como tal automaticamente.
+function markAccountStatus(idOrToken, status, pass = 'adm123') {
+  if (!idOrToken || !status) return;
+  const currentAccounts = loadAccountsStore(pass);
+  const acc = currentAccounts.find(a => a.id === idOrToken || a.token === idOrToken);
+  if (!acc || acc.status === status) return;
+
+  console.log(`[Server] Conta @${acc.username || idOrToken} mudou de status: ${acc.status} → ${status}`);
+  acc.status = status;
+  acc.updatedAt = new Date().toISOString();
+  saveAccountsStore(currentAccounts, pass);
+  notifyDashboardClientList(pass);
+}
+
 // Marca que o perfil de uma conta foi editado com sucesso (identificada por id ou token)
 function markProfileEdited(idOrToken) {
   if (!idOrToken) return;
@@ -1192,7 +1217,8 @@ wss.on('connection', (ws, req) => {
         const { targetClientIds, postData, delayBetweenClientsSec, motherAccountIds = [] } = msg;
         console.log(`[ws] Disparando postagem para ${targetClientIds.length} conta(s). Stagger: ${delayBetweenClientsSec || 0}s. Contas mães: ${motherAccountIds.length}`);
 
-        const savedAccounts = loadAccountsStore();
+        const pass = ws.accessPass || 'adm123';
+        const savedAccounts = loadAccountsStore(pass);
         // Se houver contas mães selecionadas, força a captura da URL do post
         // publicado (necessária para que as mães saibam o que repostar).
         const postDataForDispatch = motherAccountIds.length > 0 ? { ...postData, captureUrl: true } : postData;
@@ -1246,7 +1272,7 @@ wss.on('connection', (ws, req) => {
                 twitterEngine.executePostOnServer(tokenToUse, postDataForDispatch, onPostProgress)
               ).then(result => {
                 if (result && result.success) {
-                  bumpAccountPostCount(cId);
+                  bumpAccountPostCount(cId, pass);
                   const acc = savedAccounts.find(a => a.id === cId || a.token === tokenToUse);
                   if (result.tweetUrl) {
                     registerPublishedPost({
@@ -1262,9 +1288,14 @@ wss.on('connection', (ws, req) => {
                   } else if (motherAccountIds.length > 0) {
                     console.warn(`[Server] Não foi possível obter a URL do post de ${cId} — contas mães não vão repostar essa publicação.`);
                   }
+                } else if (result && result.error && (result.error.includes('suspens') || result.error.includes('bloquead') || result.error.includes('suspended') || result.error.includes('locked'))) {
+                  markAccountStatus(cId, 'Suspensa', pass);
                 }
               }).catch(err => {
                 console.error(`[Server] Erro na postagem de ${cId}:`, err.message);
+                if (err.message && (err.message.includes('suspens') || err.message.includes('bloquead') || err.message.includes('suspended') || err.message.includes('locked'))) {
+                  markAccountStatus(cId, 'Suspensa', pass);
+                }
               });
             }
           }, delayMs);

@@ -725,9 +725,32 @@ document.addEventListener('paste', (e) => {
   }
 });
 
+const importBulkLocalVideosBtn = document.getElementById('importBulkLocalVideosBtn');
+const bulkLocalVideoInput     = document.getElementById('bulkLocalVideoInput');
+
+if (importBulkLocalVideosBtn && bulkLocalVideoInput) {
+  importBulkLocalVideosBtn.addEventListener('click', () => {
+    bulkLocalVideoInput.click();
+  });
+
+  bulkLocalVideoInput.addEventListener('change', () => {
+    if (bulkLocalVideoInput.files && bulkLocalVideoInput.files.length > 0) {
+      uploadBulkLocalFilesToMassComposer(bulkLocalVideoInput.files);
+    }
+  });
+}
+
 async function uploadFiles(files) {
+  if (files.length > 1) {
+    const isConfirmMass = confirm(`Você selecionou ${files.length} arquivos. Deseja importar todos esses vídeos em massa para o Compositor Central (1 vídeo por postagem)?`);
+    if (isConfirmMass) {
+      await uploadBulkLocalFilesToMassComposer(files);
+      return;
+    }
+  }
+
   if (uploadedMediaFiles.length + files.length > 4) {
-    alert('Você só pode enviar até 4 mídias por postagem.');
+    alert('Você só pode enviar até 4 mídias por postagem única. Selecione múltiplos arquivos se desejar Disparo em Massa!');
     return;
   }
 
@@ -750,6 +773,57 @@ async function uploadFiles(files) {
     }
   } catch (err) {
     alert('Falha ao enviar arquivo: ' + err.message);
+  }
+}
+
+async function uploadBulkLocalFilesToMassComposer(files) {
+  const formData = new FormData();
+  for (let i = 0; i < files.length; i++) {
+    formData.append('files', files[i]);
+  }
+
+  try {
+    const res = await fetch('/api/upload-media', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (data.success && data.files && data.files.length > 0) {
+      const newItems = data.files.map((f, i) => {
+        const fullUrl = f.url.startsWith('http') ? f.url : (location.origin + f.url);
+        const isVid = f.type ? f.type.startsWith('video/') : f.name.match(/\.(mp4|mov|webm|avi)$/i);
+        return {
+          id: `post_local_${Date.now()}_${i + 1}`,
+          url: fullUrl,
+          caption: '',
+          mediaUrls: [fullUrl],
+          mediaDetails: [{ url: fullUrl, name: f.name, type: isVid ? 'video' : 'image' }],
+          hasVideo: !!isVid,
+          selected: true
+        };
+      });
+
+      massDispatchItems = [...(massDispatchItems || []), ...newItems];
+      renderMassPostComposerCards();
+
+      const singleFields = document.getElementById('singlePostComposerFields');
+      const massFields = document.getElementById('massPostComposerFields');
+      if (singleFields) singleFields.classList.add('hidden');
+      if (massFields) massFields.classList.remove('hidden');
+
+      const publishBtn = document.getElementById('publishBtn');
+      if (publishBtn) {
+        const btnText = publishBtn.querySelector('.btn-text');
+        if (btnText) btnText.textContent = '🚀 PUBLICAR DISPARO EM MASSA';
+      }
+
+      switchTab('composer');
+      alert(`⚡ ${newItems.length} vídeo(s) importados com sucesso para o Compositor Central em Massa!`);
+    } else {
+      alert('Erro ao carregar mídias: ' + (data.error || 'Nenhum arquivo enviado'));
+    }
+  } catch (err) {
+    alert('Erro no envio em massa: ' + err.message);
   }
 }
 
@@ -1223,7 +1297,7 @@ if (useVideoInComposerBtn) {
     }
 
     // Alterna para a aba do compositor
-    document.querySelector('[data-tab="composer"]').click();
+    switchTab('composer');
     alert('Mídias e legenda importadas com sucesso para o Compositor Central!');
   });
 }
@@ -1347,10 +1421,13 @@ function renderBulkExtractedGrid(results) {
 
 if (sendBulkToComposerBtn) {
   sendBulkToComposerBtn.addEventListener('click', () => {
-    if (!bulkExtractedResults || bulkExtractedResults.length === 0) return;
+    if (!bulkExtractedResults || bulkExtractedResults.length === 0) {
+      alert('Nenhum resultado extraído para importar.');
+      return;
+    }
 
     const items = bulkExtractedResults.map((orig, i) => ({
-      id: `post_${i + 1}`,
+      id: `post_${Date.now()}_${i + 1}`,
       url: orig.url,
       caption: orig.caption || '',
       mediaUrls: orig.mediaUrls || [],
@@ -1373,8 +1450,8 @@ if (sendBulkToComposerBtn) {
       if (btnText) btnText.textContent = '🚀 PUBLICAR DISPARO EM MASSA';
     }
 
-    document.querySelector('[data-tab="composer"]').click();
-    alert(`⚡ ${items.length} postagens em massa importadas para o Compositor Central! Altere a legenda caso necessário, selecione as contas no painel esquerdo e clique em Publicar!`);
+    switchTab('composer');
+    alert(`⚡ ${items.length} postagens em massa importadas com sucesso para o Compositor Central! Selecione as contas na barra esquerda e clique em Publicar!`);
   });
 }
 
@@ -1991,6 +2068,8 @@ if (removeInvalidAccountsBtn) {
       alert('Erro ao remover inválidas: ' + err.message);
     }
   });
+}
+
 // Botão Remover Suspensas
 const removeSuspendedAccountsBtn = document.getElementById('removeSuspendedAccountsBtn');
 if (removeSuspendedAccountsBtn) {

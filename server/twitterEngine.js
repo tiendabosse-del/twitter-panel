@@ -50,6 +50,46 @@ function getChromeExecutable() {
   return 'chrome';
 }
 
+// ── Detecta o estado de autenticação da sessão atual (usado por validação e postagem) ──
+// Antes, cada função tinha sua própria lista curta de frases ("Account suspended",
+// "Conta suspensa" etc.) e, quando nada batia, o código simplesmente assumia que a
+// conta estava OK — por isso contas suspensas continuavam aparecendo como "Ativa"
+// no painel. Esta função é a única fonte de verdade agora: cobre mais idiomas/
+// variações de texto que o Twitter/X usa para avisos de suspensão, além de checar
+// se a sessão foi encerrada (token expirado/revogado, o que também acontece com
+// frequência quando uma conta é suspensa).
+async function detectAccountAuthState(page) {
+  return await page.evaluate(() => {
+    const href = window.location.href;
+    const text = (document.body ? document.body.innerText : '').toLowerCase();
+
+    // Sessão encerrada / token não é mais válido (redirecionado para tela de login)
+    if (href.includes('/i/flow/login') || href.includes('/login') || href.includes('/i/flow/signup')) {
+      return 'logged_out';
+    }
+
+    // URLs que o Twitter/X usa para avisos de suspensão/restrição de acesso
+    if (href.includes('/account/access') || href.includes('/account/suspended') || href.includes('/i/flow/suspended')) {
+      return 'suspended';
+    }
+
+    // Frases usadas pelo Twitter/X em várias línguas para avisos de suspensão
+    const suspendedPhrases = [
+      'account suspended', 'your account is suspended', 'we suspended', "we've suspended",
+      'conta suspensa', 'sua conta foi suspensa', 'nós suspendemos', 'esta conta está suspensa',
+      'account has been locked', 'account is locked', 'your account has been locked',
+      'akun ditangguhkan', 'akun anda telah ditangguhkan', 'akun anda digantung',
+      'akaun digantung', 'akaun anda telah digantung',
+      'cuenta suspendida', 'tu cuenta ha sido suspendida', 'hemos suspendido',
+      'compte suspendu', 'nous avons suspendu',
+      'x suspends accounts', 'twitter suspends accounts', 'suspende contas que violam'
+    ];
+    if (suspendedPhrases.some(p => text.includes(p))) return 'suspended';
+
+    return 'ok';
+  });
+}
+
 // Auxiliar: garante que a mídia remota (ex: do Buscador de Mídias) seja baixada localmente antes do upload
 async function ensureLocalMediaFile(mUrl) {
   if (!mUrl) return null;
@@ -145,15 +185,9 @@ async function validateAndExtractAccount(token) {
     await page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
     await delay(3000);
 
-    const isSuspendedOrBlocked = await page.evaluate(() => {
-      const href = window.location.href;
-      const text = document.body ? document.body.innerText : '';
-      if (href.includes('/account/access') || href.includes('/account/suspended')) return true;
-      if (text.includes('Account suspended') || text.includes('Conta suspensa') || text.includes('account has been locked') || text.includes('conta foi suspensa')) return true;
-      return false;
-    });
+    const authState = await detectAccountAuthState(page);
 
-    if (isSuspendedOrBlocked) {
+    if (authState === 'suspended') {
       await browser.close();
       return {
         valid: false,
@@ -162,6 +196,16 @@ async function validateAndExtractAccount(token) {
         error: 'Conta suspensa ou bloqueada pelo Twitter',
         isProtected: false,
         unlocked: 'Não (🚫 Suspensa)'
+      };
+    }
+
+    if (authState === 'logged_out') {
+      await browser.close();
+      return {
+        valid: false,
+        status: 'Inválido',
+        token: cleanToken,
+        error: 'Token expirado ou sessão encerrada (redirecionado para tela de login)'
       };
     }
 
@@ -188,9 +232,8 @@ async function validateAndExtractAccount(token) {
       });
     } catch (_) {}
 
-    await browser.close();
-
     if (accountData && accountData.username) {
+      await browser.close();
       return {
         valid: true,
         status: 'Válido',
@@ -202,19 +245,65 @@ async function validateAndExtractAccount(token) {
         isProtected: isProtected,
         unlocked: isProtected ? 'Não (🔒 Protegida)' : 'Sim (🔓 Pública)'
       };
-    } else {
+    }
+
+    // Não achou o link do perfil, mas também não detectamos suspensão/logout
+    // claramente na primeira checagem — pode ser só lentidão no carregamento.
+    // Dá mais uma chance antes de desistir, em vez de assumir "Válido" (o que
+    // mascarava contas suspensas cuja página de aviso não batia nenhuma frase).
+    await delay(3000);
+    const retryAccountData = await page.evaluate(() => {
+      const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+      if (!link) return null;
+      const username = link.getAttribute('href')?.replace('/', '') || null;
+      const avatar = link.querySelector('img')?.src || null;
+      const nameEl = document.querySelector('[data-testid="UserName"] span');
+      const displayName = nameEl ? nameEl.textContent : username;
+      return { username, displayName, avatar };
+    }).catch(() => null);
+
+    if (retryAccountData && retryAccountData.username) {
+      await browser.close();
       return {
         valid: true,
         status: 'Válido',
         token: cleanToken,
-        username: 'acc_' + cleanToken.substring(0, 8),
-        name: 'Conta do Twitter',
-        avatar: '',
+        username: retryAccountData.username,
+        name: retryAccountData.displayName || retryAccountData.username,
+        avatar: retryAccountData.avatar || '',
         followersCount: 0,
         isProtected: isProtected,
         unlocked: isProtected ? 'Não (🔒 Protegida)' : 'Sim (🔓 Pública)'
       };
     }
+
+    const retryAuthState = await detectAccountAuthState(page).catch(() => 'ok');
+    await browser.close();
+
+    if (retryAuthState === 'suspended') {
+      return {
+        valid: false,
+        status: 'Suspensa',
+        token: cleanToken,
+        error: 'Conta suspensa ou bloqueada pelo Twitter',
+        isProtected: false,
+        unlocked: 'Não (🚫 Suspensa)'
+      };
+    }
+    if (retryAuthState === 'logged_out') {
+      return {
+        valid: false,
+        status: 'Inválido',
+        token: cleanToken,
+        error: 'Token expirado ou sessão encerrada (redirecionado para tela de login)'
+      };
+    }
+    return {
+      valid: false,
+      status: 'Inválido',
+      token: cleanToken,
+      error: 'Não foi possível confirmar o login da conta — verifique manualmente (pode estar suspensa, com desafio de verificação, ou o token expirado)'
+    };
 
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
@@ -460,11 +549,29 @@ async function extractBulkLinksData(linkUrls) {
 
   for (let i = 0; i < linkUrls.length; i++) {
     const link = String(linkUrls[i] || '').trim();
-    if (!link.includes('/status/')) continue;
+    if (!link || link.length < 5) continue;
 
     console.log(`[TwitterEngine] Extraindo mídias e legenda do link ${i + 1}/${linkUrls.length}: ${link}`);
-    const data = await fetchSingleTweetDataInternal(link);
-    results.push(data);
+
+    // Se for um link direto de arquivo de vídeo/imagem
+    const isDirectMedia = link.match(/\.(mp4|mov|webm|avi|png|jpg|jpeg|gif)($|\?)/i) || link.includes('video.twimg.com') || link.includes('/uploads/');
+    if (isDirectMedia) {
+      const isVid = link.match(/\.(mp4|mov|webm|avi)($|\?)/i) || link.includes('video.twimg.com') || link.includes('.mp4');
+      results.push({
+        url: link,
+        caption: '',
+        mediaUrls: [link],
+        mediaDetails: [{ url: link, thumbnailUrl: isVid ? '' : link, type: isVid ? 'video' : 'image' }],
+        hasVideo: !!isVid,
+        metrics: { views: 0, likes: 0, retweets: 0, replies: 0 }
+      });
+      continue;
+    }
+
+    if (link.includes('/status/')) {
+      const data = await fetchSingleTweetDataInternal(link);
+      results.push(data);
+    }
   }
 
   return results;
@@ -564,14 +671,17 @@ async function executePostOnServer(token, postData, onProgress) {
     await delay(2000);
 
     const checkAuthStatus = async () => {
-      return await page.evaluate(() => {
-        const href = window.location.href;
-        const text = document.body ? document.body.innerText : '';
-        if (href.includes('/i/flow/login') || href.includes('/login')) return 'Token expirado ou inválido (redirecionado para Login)';
-        if (href.includes('/account/access') || href.includes('/account/suspended')) return 'Twitter solicitou verificação de acesso para esta conta (desafio por IP de nuvem). Abra a extensão no seu PC para publicar direto pelo seu IP!';
-        if (text.includes('Account suspended') || text.includes('Conta suspensa') || text.includes('account has been locked') || text.includes('conta foi suspensa')) return 'Conta suspensa ou bloqueada pelo Twitter';
-        return null;
-      });
+      // /account/access é um desafio de verificação por IP (pode não ser suspensão
+      // permanente — funciona de outro IP, ex: extensão local), então mantém a
+      // mensagem específica antes de cair na detecção geral de suspensão/logout.
+      const href = await page.evaluate(() => window.location.href).catch(() => '');
+      if (href.includes('/account/access')) {
+        return 'Twitter solicitou verificação de acesso para esta conta (desafio por IP de nuvem). Abra a extensão no seu PC para publicar direto pelo seu IP!';
+      }
+      const state = await detectAccountAuthState(page).catch(() => 'ok');
+      if (state === 'suspended') return 'Conta suspensa ou bloqueada pelo Twitter';
+      if (state === 'logged_out') return 'Token expirado ou inválido (redirecionado para Login)';
+      return null;
     };
 
     let authIssue = await checkAuthStatus();
