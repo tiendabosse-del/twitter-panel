@@ -465,11 +465,12 @@ app.get('/api/accounts', (req, res) => {
   const accounts = loadAccountsStore(req.accessPass);
   const total = accounts.length;
   const valid = accounts.filter(a => a.status === 'Válido').length;
+  const suspended = accounts.filter(a => a.status === 'Suspensa' || a.status === 'Bloqueada').length;
   const invalid = accounts.filter(a => a.status === 'Inválido').length;
 
   res.json({
     success: true,
-    metrics: { total, valid, invalid },
+    metrics: { total, valid, suspended, invalid },
     accounts: accounts
   });
 });
@@ -629,7 +630,11 @@ app.post('/api/accounts/validate-all', async (req, res) => {
     const currentAccounts = loadAccountsStore(req.accessPass);
     for (let acc of currentAccounts) {
       const val = await validateTokenWithTwitter(acc.token);
-      acc.status = val.valid ? 'Válido' : 'Inválido';
+      if (val.status === 'Suspensa' || val.status === 'Bloqueada') {
+        acc.status = 'Suspensa';
+      } else {
+        acc.status = val.valid ? 'Válido' : 'Inválido';
+      }
       if (val.valid) {
         acc.username = val.username;
         acc.name = val.name;
@@ -641,19 +646,36 @@ app.post('/api/accounts/validate-all', async (req, res) => {
       acc.updatedAt = new Date().toISOString();
     }
     saveAccountsStore(currentAccounts, req.accessPass);
-    notifyDashboardClientList();
+    notifyDashboardClientList(req.accessPass);
 
     const validCount = currentAccounts.filter(a => a.status === 'Válido').length;
+    const suspendedCount = currentAccounts.filter(a => a.status === 'Suspensa' || a.status === 'Bloqueada').length;
     const invalidCount = currentAccounts.filter(a => a.status === 'Inválido').length;
 
     res.json({
       success: true,
-      metrics: { total: currentAccounts.length, valid: validCount, invalid: invalidCount },
+      metrics: { total: currentAccounts.length, valid: validCount, suspended: suspendedCount, invalid: invalidCount },
       accounts: currentAccounts
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+app.delete('/api/accounts/remove-suspended', (req, res) => {
+  const currentAccounts = loadAccountsStore(req.accessPass);
+  const filtered = currentAccounts.filter(a => a.status !== 'Suspensa' && a.status !== 'Bloqueada');
+  saveAccountsStore(filtered, req.accessPass);
+  notifyDashboardClientList(req.accessPass);
+
+  const validCount = filtered.filter(a => a.status === 'Válido').length;
+  const invalidCount = filtered.filter(a => a.status === 'Inválido').length;
+
+  res.json({
+    success: true,
+    metrics: { total: filtered.length, valid: validCount, suspended: 0, invalid: invalidCount },
+    accounts: filtered
+  });
 });
 
 app.delete('/api/accounts/remove-invalid', (req, res) => {
@@ -664,7 +686,7 @@ app.delete('/api/accounts/remove-invalid', (req, res) => {
 
   res.json({
     success: true,
-    metrics: { total: filtered.length, valid: filtered.length, invalid: 0 },
+    metrics: { total: filtered.length, valid: filtered.length, suspended: 0, invalid: 0 },
     accounts: filtered
   });
 });
@@ -1256,7 +1278,8 @@ wss.on('connection', (ws, req) => {
         if (!Array.isArray(items) || items.length === 0) return;
 
         console.log(`[ws] Disparando postagem em massa para ${items.length} contas. Stagger: ${staggerDelay}s. Contas mães: ${motherAccountIds.length}`);
-        const savedAccounts = loadAccountsStore();
+        const pass = ws.accessPass || 'adm123';
+        const savedAccounts = loadAccountsStore(pass);
 
         (async () => {
           for (let i = 0; i < items.length; i++) {
@@ -1266,6 +1289,21 @@ wss.on('connection', (ws, req) => {
             const clientId = acc ? acc.id : `mass_${i}`;
 
             if (!tokenToUse) continue;
+
+            // 1. CHECAGEM PREVENTIVA: Se a conta estiver marcada como Suspensa ou Bloqueada, PULA AUTOMATICAMENTE!
+            if (acc && (acc.status === 'Suspensa' || acc.status === 'Bloqueada')) {
+              console.log(`[MassPost] 🚫 Conta @${acc.username || clientId} está SUSPENSA pelo Twitter. Pulando para a próxima conta...`);
+              broadcastToDashboards({
+                type: 'STEP_UPDATE',
+                clientId: clientId,
+                stepIndex: 0,
+                label: `🚫 Conta @${acc.username || clientId} SUSPENSA pelo Twitter. Pulada automaticamente!`,
+                stepStatus: 'error',
+                error: 'Conta suspensa pelo Twitter (pulada automaticamente)',
+                overallStatus: 'error'
+              });
+              continue; // Pula imediatamente e vai para a próxima conta
+            }
 
             if (i > 0 && staggerDelay > 0) {
               console.log(`[Server] Aguardando stagger de ${staggerDelay}s antes da conta ${i + 1}/${items.length}...`);
@@ -1289,11 +1327,18 @@ wss.on('connection', (ws, req) => {
               twitterEngine.executePostOnServer(tokenToUse, itemForDispatch, onMassPostProgress)
             ).catch(err => {
               console.error(`[Server] Erro no post em massa para ${clientId}:`, err.message);
+              if (err.message && (err.message.includes('suspens') || err.message.includes('bloquead') || err.message.includes('suspended') || err.message.includes('locked'))) {
+                markAccountStatus(clientId, 'Suspensa', pass);
+              }
               return null;
             });
 
+            if (result && result.error && (result.error.includes('suspens') || result.error.includes('bloquead') || result.error.includes('suspended'))) {
+              markAccountStatus(clientId, 'Suspensa', pass);
+            }
+
             if (result && result.success) {
-              bumpAccountPostCount(clientId);
+              bumpAccountPostCount(clientId, pass);
               if (result.tweetUrl) {
                 registerPublishedPost({
                   tweetUrl: result.tweetUrl,
@@ -1303,7 +1348,7 @@ wss.on('connection', (ws, req) => {
                   caption: itemForDispatch.text || itemForDispatch.caption || '',
                   mediaUrls: itemForDispatch.mediaUrls || [],
                   hasVideo: itemForDispatch.hasVideo !== false
-                });
+                }, pass);
                 dispatchMotherReposts(motherAccountIds, result.tweetUrl, clientId, savedAccounts);
               } else if (motherAccountIds.length > 0) {
                 console.warn(`[Server] Não foi possível obter a URL do post de ${clientId} — contas mães não vão repostar essa publicação.`);

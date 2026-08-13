@@ -157,7 +157,7 @@ async function validateAndExtractAccount(token) {
       await browser.close();
       return {
         valid: false,
-        status: 'Bloqueada',
+        status: 'Suspensa',
         token: cleanToken,
         error: 'Conta suspensa ou bloqueada pelo Twitter',
         isProtected: false,

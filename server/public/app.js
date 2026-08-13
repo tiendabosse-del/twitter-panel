@@ -214,25 +214,25 @@ function renderAccountCard(acc) {
   const accId = acc.id || acc.token;
   const isSelected = selectedClientIds.has(accId);
   const isProtected = acc.isProtected === true;
-  const isBlocked = acc.status === 'Bloqueada';
+  const isSuspended = acc.status === 'Suspensa' || acc.status === 'Bloqueada';
   const isMother = acc.isMother === true;
-  const lockIcon = isBlocked ? ' 🚫' : (isProtected ? ' 🔒' : '');
+  const lockIcon = isSuspended ? ' 🚫' : (isProtected ? ' 🔒' : '');
   const handle = acc.username && acc.username !== 'Desconhecido' ? `@${acc.username}${lockIcon}` : 'Token não validado';
   const avatar = acc.avatar || '';
   const canBeMother = !!acc.token;
 
-  const badges = [`<span>${isBlocked ? '🚫 Bloqueada' : (isProtected ? '🔒 Protegida' : '🟢 Ativa')}</span>`];
+  const badges = [`<span>${isSuspended ? '<strong style="color:#ef4444;">🚫 Suspensa</strong>' : (isProtected ? '🔒 Protegida' : '🟢 Ativa')}</span>`];
   if (acc.postsCount) badges.push(`<span>📝 ${acc.postsCount} post${acc.postsCount > 1 ? 's' : ''}</span>`);
   if (acc.profileEdited) badges.push(`<span>✏️ Perfil editado</span>`);
 
   return `
-    <div class="account-card ${isSelected ? 'selected' : ''}" data-id="${accId}">
+    <div class="account-card ${isSelected ? 'selected' : ''} ${isSuspended ? 'suspended-card' : ''}" data-id="${accId}">
       <input type="checkbox" class="account-checkbox" ${isSelected ? 'checked' : ''} data-id="${accId}">
       ${avatar
         ? `<img src="${avatar}" class="account-avatar" alt="Avatar">`
         : `<div class="account-avatar">${handle.substring(1, 3).toUpperCase()}</div>`}
       <div class="account-details">
-        <div class="account-name">${handle}</div>
+        <div class="account-name" style="${isSuspended ? 'color:#ef4444;' : ''}">${handle}</div>
         <div class="account-meta">${badges.join('')}</div>
       </div>
       ${canBeMother ? `<button type="button" class="mother-toggle-btn ${isMother ? 'active' : ''}" data-id="${accId}" title="${isMother ? 'Remover como Conta Mãe' : 'Marcar como Conta Mãe (repost automático)'}">👑</button>` : ''}
@@ -1608,9 +1608,12 @@ async function loadAccountsManagerData() {
   }
 }
 
+const metricSuspended = document.getElementById('metricSuspended');
+
 function updateAccountsMetrics(metrics) {
   if (metricTotal) metricTotal.textContent = metrics?.total || 0;
   if (metricValid) metricValid.textContent = metrics?.valid || 0;
+  if (metricSuspended) metricSuspended.textContent = metrics?.suspended || 0;
   if (metricInvalid) metricInvalid.textContent = metrics?.invalid || 0;
 }
 
@@ -1627,26 +1630,40 @@ function renderAccountsTable(accounts) {
   }
 
   accountsTableBody.innerHTML = accounts.map(acc => {
+    const isSuspended = acc.status === 'Suspensa' || acc.status === 'Bloqueada';
     const isProtected = acc.isProtected === true;
     const isMother = acc.isMother === true;
-    const usernameDisplay = acc.username && acc.username !== 'Desconhecido' ? `@${acc.username}${isProtected ? ' 🔒' : ''}${isMother ? ' 👑' : ''}` : 'Token não validado';
+    const lockIcon = isSuspended ? ' 🚫' : (isProtected ? ' 🔒' : (isMother ? ' 👑' : ''));
+    const usernameDisplay = acc.username && acc.username !== 'Desconhecido' ? `@${acc.username}${lockIcon}` : 'Token não validado';
     const avatarSrc = acc.avatar || '';
     const maskedToken = acc.token ? (acc.token.substring(0, 14) + '...') : '---';
     const isValid = acc.status === 'Válido';
     const followers = acc.followersCount || 0;
-    const unlockHtml = isProtected
-      ? `<span class="unlock-badge locked" style="background: rgba(239, 68, 68, 0.2); color: #f87171; padding: 4px 8px; border-radius: 6px; font-weight: bold;">🔒 Protegida</span>`
-      : `<span class="unlock-badge unlocked" style="background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 4px 8px; border-radius: 6px; font-weight: bold;">🔓 Pública</span>`;
+
+    const unlockHtml = isSuspended
+      ? `<span class="unlock-badge suspended" style="background: rgba(239, 68, 68, 0.2); color: #f87171; padding: 4px 8px; border-radius: 6px; font-weight: bold;">🚫 Suspensa</span>`
+      : (isProtected
+        ? `<span class="unlock-badge locked" style="background: rgba(239, 68, 68, 0.2); color: #f87171; padding: 4px 8px; border-radius: 6px; font-weight: bold;">🔒 Protegida</span>`
+        : `<span class="unlock-badge unlocked" style="background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 4px 8px; border-radius: 6px; font-weight: bold;">🔓 Pública</span>`);
+
+    let statusPill = '';
+    if (isSuspended) {
+      statusPill = `<span class="status-pill suspended" style="background: rgba(239, 68, 68, 0.25); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.5); font-weight: bold; padding: 4px 10px; border-radius: 6px;">🚫 Suspensa</span>`;
+    } else if (isValid) {
+      statusPill = `<span class="status-pill valid">Válido</span>`;
+    } else {
+      statusPill = `<span class="status-pill invalid">Inválido</span>`;
+    }
 
     return `
-      <tr>
+      <tr class="${isSuspended ? 'suspended-row' : ''}">
         <td style="text-align:center;">
           <input type="checkbox" class="account-table-checkbox" data-id="${acc.id}">
         </td>
         <td>
           <div class="user-cell">
             ${avatarSrc ? `<img src="${avatarSrc}" alt="Avatar">` : `<div class="account-avatar">${usernameDisplay.substring(1, 3).toUpperCase()}</div>`}
-            <span class="user-handle">${usernameDisplay}</span>
+            <span class="user-handle" style="${isSuspended ? 'color:#ef4444; font-weight:bold;' : ''}">${usernameDisplay}</span>
           </div>
         </td>
         <td>
@@ -1656,9 +1673,7 @@ function renderAccountsTable(accounts) {
           </div>
         </td>
         <td>
-          <span class="status-pill ${isValid ? 'valid' : 'invalid'}">
-            ${isValid ? 'Válido' : 'Inválido'}
-          </span>
+          ${statusPill}
         </td>
         <td>
           ${unlockHtml}
@@ -2008,6 +2023,24 @@ if (removeInvalidAccountsBtn) {
       }
     } catch (err) {
       alert('Erro ao remover inválidas: ' + err.message);
+    }
+  });
+// Botão Remover Suspensas
+const removeSuspendedAccountsBtn = document.getElementById('removeSuspendedAccountsBtn');
+if (removeSuspendedAccountsBtn) {
+  removeSuspendedAccountsBtn.addEventListener('click', async () => {
+    if (!confirm('Deseja remover todas as contas marcadas como suspensas/bloqueadas pelo Twitter?')) return;
+    try {
+      const res = await apiFetch('/api/accounts/remove-suspended', { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        allSavedAccountsList = data.accounts;
+        updateAccountsMetrics(data.metrics);
+        renderAccountsTable(data.accounts);
+        alert(`${data.removed || 0} conta(s) suspensa(s) removida(s) com sucesso.`);
+      }
+    } catch (err) {
+      alert('Erro ao remover suspensas: ' + err.message);
     }
   });
 }

@@ -346,7 +346,7 @@
             </div>
           </div>
 
-          <!-- Cards de Métricas (Total, Válidas, Inválidas) -->
+          <!-- Cards de Métricas (Total, Válidas, Suspensas, Inválidas) -->
           <div class="metrics-cards-grid">
             <div class="metric-card">
               <div class="metric-info">
@@ -361,6 +361,13 @@
                 <span class="metric-value green" id="metricValid">0</span>
               </div>
               <div class="metric-icon green">✔</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-info">
+                <span class="metric-label">Suspensas</span>
+                <span class="metric-value red" id="metricSuspended" style="color: #ef4444;">0</span>
+              </div>
+              <div class="metric-icon red">🚫</div>
             </div>
             <div class="metric-card">
               <div class="metric-info">
@@ -379,6 +386,7 @@
             <div class="toolbar-actions">
               <button type="button" class="btn-toolbar" id="unprotectSelectedAccountsBtn">🔓 Tirar Proteção</button>
               <button type="button" class="btn-toolbar danger" id="deleteSelectedAccountsBtn">🗑️ Excluir Selecionadas</button>
+              <button type="button" class="btn-toolbar danger" id="removeSuspendedAccountsBtn">🚫 Excluir Suspensas</button>
               <button type="button" class="btn-toolbar" id="validateAllAccountsBtn">🔄 Validar Todas</button>
               <button type="button" class="btn-toolbar" id="exportAllTokensBtn">📥 Exportar</button>
               <button type="button" class="btn-toolbar danger" id="removeInvalidAccountsBtn">🗑️ Remover Inválidas</button>
