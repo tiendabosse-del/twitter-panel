@@ -31,6 +31,39 @@ function fetchWithTimeout(url, options = {}, timeoutMs = 20000) {
   return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
 }
 
+// Registro de todos os navegadores headless abertos no momento, para o botão
+// "Pausar Ações" do painel conseguir interromper ações em andamento na hora —
+// sem isso, pausar só impedia novas ações de começar, mas as que já estavam
+// rodando continuavam até o fim.
+const activeBrowsers = new Set();
+
+// Abre o navegador já registrado nesse controle. O close() é sobrescrito para
+// se auto-remover do registro, então todo `browser.close()` já existente no
+// código (não importa o call site) continua funcionando normalmente e mantém
+// o registro limpo sozinho.
+async function launchTrackedBrowser(options) {
+  const browser = await puppeteer.launch(options);
+  activeBrowsers.add(browser);
+  const originalClose = browser.close.bind(browser);
+  browser.close = async (...args) => {
+    activeBrowsers.delete(browser);
+    return originalClose(...args);
+  };
+  return browser;
+}
+
+// Fecha à força todo navegador headless ativo no momento (pausa imediata).
+// Cada função de ação vai capturar o erro resultante (ex: "Target closed") no
+// próprio catch e reportar como ação interrompida.
+function cancelAllActiveSessions() {
+  const count = activeBrowsers.size;
+  for (const browser of activeBrowsers) {
+    browser.close().catch(() => {});
+  }
+  activeBrowsers.clear();
+  return count;
+}
+
 function getChromeExecutable() {
   if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
     return process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -49,6 +82,90 @@ function getChromeExecutable() {
   }
   return 'chrome';
 }
+
+let profileDirCounter = 0;
+// Gera um diretório de perfil temporário garantidamente único por navegador.
+// Sem isso, sob alta concorrência (vários navegadores abrindo quase no mesmo
+// milissegundo), o diretório auto-gerado pelo Puppeteer podia colidir entre
+// instâncias diferentes ("The browser is already running for ..."), e a
+// limpeza de um perfil ainda em uso por outro processo falhava com EBUSY.
+function getUniqueProfileDir() {
+  profileDirCounter++;
+  return path.join(require('os').tmpdir(), `pptr_profile_${Date.now()}_${profileDirCounter}_${Math.random().toString(36).slice(2, 8)}`);
+}
+
+// Flags extras para reduzir o consumo de CPU/RAM de cada instância do Chrome —
+// importante porque até MAX_CONCURRENT_BROWSERS (server.js) rodam ao mesmo tempo
+// durante a postagem em massa. Desligam só funcionalidades de navegador desktop
+// que a automação não usa (sync, tradução, extensões, throttling em background
+// etc.), sem alterar nada do fluxo de postagem em si.
+const LOW_RESOURCE_ARGS = [
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--no-first-run',
+  '--no-zygote',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-background-timer-throttling',
+  '--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding',
+  '--disable-sync',
+  '--disable-translate',
+  '--disable-default-apps',
+  '--metrics-recording-only',
+  '--mute-audio'
+];
+
+// Bloqueia carregamento de imagens, vídeo/áudio e fontes web. O fluxo de postagem
+// só precisa achar botões/campos por seletor — nunca renderiza a timeline pra
+// alguém ver — e mídia é de longe o que mais pesa CPU/RAM/rede por instância
+// quando várias rodam em paralelo. CSS e JS continuam carregando normalmente
+// para não quebrar layout/funcionamento da página.
+async function blockHeavyResources(page) {
+  await page.setRequestInterception(true);
+  page.on('request', req => {
+    const type = req.resourceType();
+    if (type === 'image' || type === 'media' || type === 'font') {
+      req.abort().catch(() => {});
+    } else {
+      req.continue().catch(() => {});
+    }
+  });
+}
+
+// Como agora cada navegador usa um userDataDir explícito (em vez do padrão
+// auto-limpo do Puppeteer), essas pastas temporárias não são apagadas
+// sozinhas ao fechar o navegador — precisam de limpeza manual periódica,
+// senão se acumulam no disco para sempre. Roda ao iniciar o servidor e a
+// cada hora, removendo pastas de perfil (nossas ou órfãs de sessões
+// anteriores que travaram) com mais de 1 hora de idade.
+// Assíncrona e não-bloqueante: com muitas contas rodando ao longo do tempo, dá
+// pra acumular centenas de pastas de perfil (cada uma com um profile inteiro do
+// Chrome — cache, cookies, IndexedDB...). A versão antiga usava fs.*Sync em
+// loop, o que travava a thread principal do Node por vários segundos assim que
+// o servidor iniciava (o server.listen() só rodava DEPOIS da limpeza inteira
+// terminar) — quanto mais pastas acumuladas, mais lento o restart do painel.
+async function cleanupOldProfileDirs() {
+  try {
+    const tmpDir = require('os').tmpdir();
+    const entries = await fs.promises.readdir(tmpDir).catch(() => []);
+    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    for (const entry of entries) {
+      if (!entry.startsWith('pptr_profile_')) continue;
+      const fullPath = path.join(tmpDir, entry);
+      try {
+        const stat = await fs.promises.stat(fullPath);
+        if (stat.mtimeMs < oneHourAgo) {
+          await fs.promises.rm(fullPath, { recursive: true, force: true });
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+// Disparada sem await de propósito — roda em segundo plano e nunca atrasa a
+// inicialização do servidor.
+cleanupOldProfileDirs();
+setInterval(cleanupOldProfileDirs, 60 * 60 * 1000);
 
 // ── Detecta o estado de autenticação da sessão atual (usado por validação e postagem) ──
 // Antes, cada função tinha sua própria lista curta de frases ("Account suspended",
@@ -90,9 +207,15 @@ async function detectAccountAuthState(page) {
   });
 }
 
-// Auxiliar: garante que a mídia remota (ex: do Buscador de Mídias) seja baixada localmente antes do upload
+// Auxiliar: garante que a mídia remota (ex: do Buscador de Mídias) seja baixada
+// localmente antes do upload (usado só como fallback, quando o anexo direto em
+// memória via attachMediaInPage não é possível). Retorna também isFreshDownload
+// pra quem chama saber se foi ESTA chamada que baixou o arquivo agora (nesse
+// caso é responsabilidade de quem chamou apagar depois de usar) — um arquivo
+// que já existia (upload manual do usuário, ou já baixado por outra conta no
+// mesmo disparo em massa) nunca é apagado automaticamente.
 async function ensureLocalMediaFile(mUrl) {
-  if (!mUrl) return null;
+  if (!mUrl) return { path: null, isFreshDownload: false };
   const uploadsDir = path.join(__dirname, 'public', 'uploads');
   if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -100,7 +223,7 @@ async function ensureLocalMediaFile(mUrl) {
   const filename = path.basename(cleanUrl);
   const localPath = path.join(uploadsDir, filename);
 
-  if (fs.existsSync(localPath)) return localPath;
+  if (fs.existsSync(localPath)) return { path: localPath, isFreshDownload: false };
 
   if (mUrl.startsWith('http://') || mUrl.startsWith('https://')) {
     try {
@@ -109,14 +232,14 @@ async function ensureLocalMediaFile(mUrl) {
       if (res.ok) {
         const buffer = await res.arrayBuffer();
         fs.writeFileSync(localPath, Buffer.from(buffer));
-        console.log(`[TwitterEngine] Mídia salva em: ${localPath}`);
-        return localPath;
+        console.log(`[TwitterEngine] Mídia salva temporariamente em: ${localPath}`);
+        return { path: localPath, isFreshDownload: true };
       }
     } catch (e) {
       console.error(`[TwitterEngine] Erro ao baixar mídia remota (${e.name === 'AbortError' ? 'timeout de 25s' : e.message}):`, mUrl);
     }
   }
-  return null;
+  return { path: null, isFreshDownload: false };
 }
 
 // Localiza o elemento <article> do tweet principal recém-postado no perfil do usuário
@@ -156,15 +279,17 @@ async function validateAndExtractAccount(token) {
 
   let browser = null;
   try {
-    browser = await puppeteer.launch({
+    browser = await launchTrackedBrowser({
       executablePath: getChromeExecutable(),
+      userDataDir: getUniqueProfileDir(),
       headless: 'new',
       protocolTimeout: 600000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800'
+        '--window-size=1280,800',
+        ...LOW_RESOURCE_ARGS
       ]
     });
 
@@ -173,6 +298,7 @@ async function validateAndExtractAccount(token) {
     page.setDefaultNavigationTimeout(600000);
 
     await page.setViewport({ width: 1280, height: 800 });
+    await blockHeavyResources(page);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
     const expirationDate = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
@@ -188,7 +314,7 @@ async function validateAndExtractAccount(token) {
     const authState = await detectAccountAuthState(page);
 
     if (authState === 'suspended') {
-      await browser.close();
+      await browser.close().catch(() => {});
       return {
         valid: false,
         status: 'Suspensa',
@@ -200,7 +326,7 @@ async function validateAndExtractAccount(token) {
     }
 
     if (authState === 'logged_out') {
-      await browser.close();
+      await browser.close().catch(() => {});
       return {
         valid: false,
         status: 'Inválido',
@@ -233,7 +359,7 @@ async function validateAndExtractAccount(token) {
     } catch (_) {}
 
     if (accountData && accountData.username) {
-      await browser.close();
+      await browser.close().catch(() => {});
       return {
         valid: true,
         status: 'Válido',
@@ -263,7 +389,7 @@ async function validateAndExtractAccount(token) {
     }).catch(() => null);
 
     if (retryAccountData && retryAccountData.username) {
-      await browser.close();
+      await browser.close().catch(() => {});
       return {
         valid: true,
         status: 'Válido',
@@ -278,7 +404,7 @@ async function validateAndExtractAccount(token) {
     }
 
     const retryAuthState = await detectAccountAuthState(page).catch(() => 'ok');
-    await browser.close();
+    await browser.close().catch(() => {});
 
     if (retryAuthState === 'suspended') {
       return {
@@ -323,15 +449,17 @@ async function unprotectAccountOnServer(token, onProgress = () => {}) {
   try {
     onProgress(0, 'Iniciando navegador no servidor para desproteger conta...', 'running');
 
-    browser = await puppeteer.launch({
+    browser = await launchTrackedBrowser({
       executablePath: getChromeExecutable(),
+      userDataDir: getUniqueProfileDir(),
       headless: 'new',
       protocolTimeout: 300000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800'
+        '--window-size=1280,800',
+        ...LOW_RESOURCE_ARGS
       ]
     });
 
@@ -340,6 +468,7 @@ async function unprotectAccountOnServer(token, onProgress = () => {}) {
     page.setDefaultNavigationTimeout(300000);
 
     await page.setViewport({ width: 1280, height: 800 });
+    await blockHeavyResources(page);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
     const expirationDate = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
@@ -406,7 +535,7 @@ async function unprotectAccountOnServer(token, onProgress = () => {}) {
     }
 
     onProgress(8, '✓ Conta desprotegida e convertida para pública com sucesso!', 'completed');
-    await browser.close();
+    await browser.close().catch(() => {});
 
     return {
       success: true,
@@ -577,6 +706,42 @@ async function extractBulkLinksData(linkUrls) {
   return results;
 }
 
+// Busca a(s) mídia(s) e anexa direto no campo de upload SEM passar pelo disco
+// do servidor: o fetch() e a montagem do File acontecem dentro da própria aba
+// do navegador (em memória), usando o truque de DataTransfer para popular o
+// <input type="file"> como se o usuário tivesse escolhido o arquivo. Só falha
+// quando o servidor de origem da mídia não libera CORS pra esse fetch — nesse
+// caso quem chama cai automaticamente pro download temporário em disco.
+async function attachMediaInPage(page, fileInputSelector, mediaUrls) {
+  return await page.evaluate(async (selector, urls) => {
+    try {
+      const input = document.querySelector(selector);
+      if (!input) return { success: false, reason: 'input-not-encontrado' };
+
+      const dataTransfer = new DataTransfer();
+      for (const url of urls) {
+        const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+        if (!res.ok) return { success: false, reason: `http-${res.status}` };
+        const blob = await res.blob();
+        const cleanUrl = String(url).split('?')[0];
+        const filename = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1) || `media_${Date.now()}`;
+        const isVideoExt = /\.(mp4|mov|webm|m4v)$/i.test(filename);
+        const type = blob.type || (isVideoExt ? 'video/mp4' : 'image/jpeg');
+        dataTransfer.items.add(new File([blob], filename, { type }));
+      }
+
+      if (dataTransfer.files.length === 0) return { success: false, reason: 'nenhum-arquivo' };
+
+      input.files = dataTransfer.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return { success: true, count: dataTransfer.files.length };
+    } catch (err) {
+      return { success: false, reason: (err && err.message) || String(err) };
+    }
+  }, fileInputSelector, mediaUrls);
+}
+
 // Digita texto com suporte universal a Emojis (UTF-16), zero-width spaces e ativação de React/Draft.js
 async function safeTypeText(page, selector, text) {
   if (!text) return true;
@@ -632,31 +797,65 @@ async function safeTypeText(page, selector, text) {
 async function executePostOnServer(token, postData, onProgress) {
   const cleanToken = String(token || '').trim();
   let browser = null;
+  // Caminhos que precisaram ser baixados pro disco (fallback, quando o anexo
+  // direto em memória não deu certo) — apagados assim que o post terminar,
+  // com sucesso ou erro, pra nunca acumular vídeo/foto no disco do servidor.
+  const downloadedMediaPaths = [];
+  const cleanupDownloadedMedia = () => {
+    downloadedMediaPaths.forEach(p => {
+      fs.promises.unlink(p).then(
+        () => console.log(`[TwitterEngine] Mídia temporária apagada: ${p}`),
+        () => {}
+      );
+    });
+  };
 
   try {
     onProgress(0, 'Iniciando navegador headless no servidor...', 'running');
 
-    browser = await puppeteer.launch({
+    let proxyServer = (process.env.TWITTER_PROXY_SERVER || (postData && postData.proxy) || '').trim();
+    let proxyAuth = null;
+    const extraArgs = [];
+
+    if (proxyServer) {
+      if (proxyServer.includes('@')) {
+        let clean = proxyServer.replace(/^https?:\/\//, '');
+        const parts = clean.split('@');
+        const [u, p] = parts[0].split(':');
+        proxyServer = parts[1];
+        proxyAuth = { username: u, password: p };
+      }
+      if (!proxyServer.startsWith('http')) {
+        proxyServer = `http://${proxyServer}`;
+      }
+      extraArgs.push(`--proxy-server=${proxyServer}`);
+      console.log(`[TwitterEngine] Usando Proxy para navegação: ${proxyServer}`);
+    }
+
+    browser = await launchTrackedBrowser({
       executablePath: getChromeExecutable(),
+      userDataDir: getUniqueProfileDir(),
       headless: 'new',
       protocolTimeout: 600000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800'
+        '--window-size=1280,800',
+        ...extraArgs,
+        ...LOW_RESOURCE_ARGS
       ]
     });
 
     const page = await browser.newPage();
+    if (proxyAuth) {
+      await page.authenticate(proxyAuth).catch(() => {});
+    }
     page.setDefaultTimeout(600000);
     page.setDefaultNavigationTimeout(600000);
 
     await page.setViewport({ width: 1280, height: 800 });
+    await blockHeavyResources(page);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
     const expirationDate = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
@@ -696,15 +895,12 @@ async function executePostOnServer(token, postData, onProgress) {
     // Passo 2: Digitando texto
     onProgress(2, 'Digitando texto da publicação...', 'running');
 
-    // Aguarda o React do Twitter montar a caixa de texto do post no DOM (até 25 segundos)
+    // Aguarda o React do Twitter montar a caixa de texto do post no DOM. Timeout
+    // generoso (era 25s): sob carga, com várias contas postando ao mesmo tempo
+    // (modo Fast/Padrão rodando até 8 em paralelo), a hidratação da página pode
+    // demorar bem mais que isso — um timeout curto gerava erro falso de "caixa
+    // de texto não encontrada" mesmo com a conta e o token perfeitamente OK.
     const combinedSelector = '[data-testid="tweetTextarea_0"], [data-testid="tweetTextarea_0_ariaLabel"], div[contenteditable="true"][role="textbox"], div[contenteditable="true"], [role="textbox"], [data-testid="SideNav_NewTweet_Button"]';
-    
-    await page.waitForSelector(combinedSelector, { timeout: 25000 }).catch(() => {});
-
-    authIssue = await checkAuthStatus();
-    if (authIssue) throw new Error(authIssue);
-
-    let matchedEditorSelector = null;
     const selectors = [
       '[data-testid="tweetTextarea_0"]',
       '[data-testid="tweetTextarea_0_ariaLabel"]',
@@ -713,14 +909,22 @@ async function executePostOnServer(token, postData, onProgress) {
       '[role="textbox"]'
     ];
 
-    for (const sel of selectors) {
-      const el = await page.$(sel).catch(() => null);
-      if (el) {
-        await el.click().catch(() => {});
-        matchedEditorSelector = sel;
-        break;
+    const tryFindEditor = async () => {
+      for (const sel of selectors) {
+        const el = await page.$(sel).catch(() => null);
+        if (el) {
+          await el.click().catch(() => {});
+          return sel;
+        }
       }
-    }
+      return null;
+    };
+
+    await page.waitForSelector(combinedSelector, { timeout: 45000 }).catch(() => {});
+    authIssue = await checkAuthStatus();
+    if (authIssue) throw new Error(authIssue);
+
+    let matchedEditorSelector = await tryFindEditor();
 
     if (!matchedEditorSelector) {
       // Se a caixa de texto ainda não está visível no modal, clica no botão "Postar" lateral
@@ -733,20 +937,30 @@ async function executePostOnServer(token, postData, onProgress) {
       authIssue = await checkAuthStatus();
       if (authIssue) throw new Error(authIssue);
 
-      for (const sel of selectors) {
-        const el = await page.$(sel).catch(() => null);
-        if (el) {
-          await el.click().catch(() => {});
-          matchedEditorSelector = sel;
-          break;
-        }
-      }
+      matchedEditorSelector = await tryFindEditor();
+    }
+
+    if (!matchedEditorSelector) {
+      // Ainda não achou: pode ter sido só lentidão pontual (várias contas
+      // abrindo o compositor ao mesmo tempo). Faz uma última tentativa com
+      // navegação nova antes de desistir, em vez de já reportar erro.
+      console.warn('[TwitterEngine] Caixa de texto não encontrada na 1ª tentativa, recarregando compositor...');
+      await page.goto('https://x.com/compose/post', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+      await delay(3000);
+
+      authIssue = await checkAuthStatus();
+      if (authIssue) throw new Error(authIssue);
+
+      await page.waitForSelector(combinedSelector, { timeout: 45000 }).catch(() => {});
+      matchedEditorSelector = await tryFindEditor();
     }
 
     if (!matchedEditorSelector) {
       authIssue = await checkAuthStatus();
       if (authIssue) throw new Error(authIssue);
-      throw new Error('Caixa de texto da publicação não encontrada. Verifique se o token da conta é válido e está ativo.');
+      const diagUrl = await page.url().catch(() => 'desconhecida');
+      const diagTitle = await page.title().catch(() => 'desconhecido');
+      throw new Error(`Caixa de texto da publicação não encontrada. Verifique se o token da conta é válido e está ativo. [URL: ${diagUrl} | Título: ${diagTitle}]`);
     }
 
     await delay(500);
@@ -764,22 +978,48 @@ async function executePostOnServer(token, postData, onProgress) {
     if (postData.mediaUrls && postData.mediaUrls.length > 0) {
       const fileInput = await page.$('input[data-testid="fileInput"]');
       if (fileInput) {
-        const localPaths = [];
         for (const mUrl of postData.mediaUrls) {
-          const lPath = await ensureLocalMediaFile(mUrl);
-          if (lPath && fs.existsSync(lPath)) {
-            localPaths.push(lPath);
-            const lowerPath = lPath.toLowerCase();
-            const lowerUrl = String(mUrl || '').toLowerCase();
-            if (lowerPath.includes('.mp4') || lowerPath.includes('.mov') || lowerPath.includes('.webm') || lowerPath.includes('.m4v') || lowerUrl.includes('.mp4') || lowerUrl.includes('video')) {
-              isVideoUpload = true;
-            }
+          const lowerUrl = String(mUrl || '').toLowerCase();
+          if (lowerUrl.includes('.mp4') || lowerUrl.includes('.mov') || lowerUrl.includes('.webm') || lowerUrl.includes('.m4v') || lowerUrl.includes('video')) {
+            isVideoUpload = true;
           }
         }
 
-        if (localPaths.length > 0) {
-          await fileInput.uploadFile(...localPaths);
-          console.log(`[TwitterEngine] ${localPaths.length} mídia(s) anexadas ao Twitter. IsVideo: ${isVideoUpload}`);
+        // MÉTODO 1 (preferencial): busca a mídia e anexa direto na aba do
+        // navegador, em memória — nunca grava nada no disco do servidor. Só
+        // não funciona se o servidor de origem da mídia bloquear CORS pra
+        // esse fetch feito de dentro da página do X.
+        let attached = false;
+        const inPageResult = await attachMediaInPage(page, 'input[data-testid="fileInput"]', postData.mediaUrls).catch(err => ({ success: false, reason: err.message }));
+        if (inPageResult && inPageResult.success) {
+          attached = true;
+          console.log(`[TwitterEngine] ${inPageResult.count} mídia(s) anexada(s) direto em memória (sem tocar o disco). IsVideo: ${isVideoUpload}`);
+        } else {
+          console.log(`[TwitterEngine] Anexo em memória não disponível (${inPageResult ? inPageResult.reason : 'erro desconhecido'}) — baixando temporariamente...`);
+        }
+
+        // MÉTODO 2 (fallback): baixa a mídia temporariamente pro disco do
+        // servidor e anexa via upload de arquivo. Qualquer arquivo baixado
+        // NESTA chamada (não reaproveitado de um upload manual ou de outra
+        // conta do mesmo disparo em massa) é apagado assim que o post terminar.
+        if (!attached) {
+          const localPaths = [];
+          for (const mUrl of postData.mediaUrls) {
+            const { path: lPath, isFreshDownload } = await ensureLocalMediaFile(mUrl);
+            if (lPath && fs.existsSync(lPath)) {
+              localPaths.push(lPath);
+              if (isFreshDownload) downloadedMediaPaths.push(lPath);
+            }
+          }
+
+          if (localPaths.length > 0) {
+            await fileInput.uploadFile(...localPaths);
+            attached = true;
+            console.log(`[TwitterEngine] ${localPaths.length} mídia(s) anexada(s) via download temporário. IsVideo: ${isVideoUpload}`);
+          }
+        }
+
+        if (attached) {
           await page.waitForSelector('[data-testid="attachments"]', { timeout: 120000 }).catch(() => {});
           await delay(3000);
         }
@@ -1311,11 +1551,13 @@ function getRandomBioComment(baseComment = '') {
     }
 
     onProgress(9, finalMsg, 'completed');
-    await browser.close();
+    await browser.close().catch(() => {});
+    cleanupDownloadedMedia();
     return { success: true, tweetUrl: capturedTweetUrl };
 
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
+    cleanupDownloadedMedia();
     console.error('[TwitterEngine] Erro ao postar:', err.message);
     onProgress(-1, 'Erro na publicação: ' + err.message, 'error', err.message);
     return { success: false, error: err.message };
@@ -1339,15 +1581,17 @@ async function repostTweetOnServer(token, tweetUrl, onProgress = () => {}) {
   try {
     onProgress(0, 'Iniciando navegador para repost (conta mãe)...', 'running');
 
-    browser = await puppeteer.launch({
+    browser = await launchTrackedBrowser({
       executablePath: getChromeExecutable(),
+      userDataDir: getUniqueProfileDir(),
       headless: 'new',
       protocolTimeout: 300000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800'
+        '--window-size=1280,800',
+        ...LOW_RESOURCE_ARGS
       ]
     });
 
@@ -1356,6 +1600,7 @@ async function repostTweetOnServer(token, tweetUrl, onProgress = () => {}) {
     page.setDefaultNavigationTimeout(120000);
 
     await page.setViewport({ width: 1280, height: 800 });
+    await blockHeavyResources(page);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
     const expirationDate = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
@@ -1386,13 +1631,13 @@ async function repostTweetOnServer(token, tweetUrl, onProgress = () => {}) {
     });
 
     if (clickResult === 'not_found') {
-      await browser.close();
+      await browser.close().catch(() => {});
       return { success: false, error: 'Botão de repost não encontrado na publicação.' };
     }
 
     if (clickResult === 'already') {
       onProgress(3, '✓ Esta conta mãe já tinha dado repost nesse post.', 'completed');
-      await browser.close();
+      await browser.close().catch(() => {});
       return { success: true, alreadyReposted: true };
     }
 
@@ -1438,7 +1683,7 @@ async function repostTweetOnServer(token, tweetUrl, onProgress = () => {}) {
 
     await delay(1800);
     onProgress(4, '✓ Repost e Curtida (Like) realizados com sucesso pela conta mãe!', 'completed');
-    await browser.close();
+    await browser.close().catch(() => {});
     return { success: true };
 
   } catch (err) {
@@ -1450,22 +1695,68 @@ async function repostTweetOnServer(token, tweetUrl, onProgress = () => {}) {
 }
 
 // ── Executa Edição de Perfil no Servidor Node.js ──────────────────────────────
+// Preenche um campo de texto da tela de perfil de forma resiliente: se o
+// clique inicial falhar porque o React do X re-renderizou o campo bem nesse
+// instante ("Node is detached from document"), busca o elemento de novo e
+// tenta mais uma vez antes de pular esse campo — isso ficou mais comum quando
+// várias contas editam o perfil rápido/em paralelo.
+async function fillProfileField(page, selector, value) {
+  let el = await page.$(selector);
+  if (!el) return false;
+
+  let clicked = false;
+  for (let attempt = 1; attempt <= 3 && !clicked; attempt++) {
+    try {
+      await el.click();
+      clicked = true;
+    } catch (err) {
+      if (attempt === 3) return false;
+      await delay(500);
+      el = await page.$(selector);
+      if (!el) return false;
+    }
+  }
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('A');
+  await page.keyboard.up('Control');
+  await page.keyboard.press('Backspace');
+  await delay(300);
+
+  if (value && String(value).trim()) {
+    await page.keyboard.type(String(value).trim(), { delay: 15 });
+    await delay(500);
+  }
+  return true;
+}
+
 async function executeProfileEditOnServer(token, profileData, onProgress) {
   const cleanToken = String(token || '').trim();
   let browser = null;
+  const downloadedMediaPaths = [];
+  const cleanupDownloadedMedia = () => {
+    downloadedMediaPaths.forEach(p => {
+      fs.promises.unlink(p).then(
+        () => console.log(`[TwitterEngine] Mídia temporária apagada: ${p}`),
+        () => {}
+      );
+    });
+  };
 
   try {
     onProgress(0, 'Iniciando navegador headless para edição de perfil...', 'running');
 
-    browser = await puppeteer.launch({
+    browser = await launchTrackedBrowser({
       executablePath: getChromeExecutable(),
+      userDataDir: getUniqueProfileDir(),
       headless: 'new',
       protocolTimeout: 300000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800'
+        '--window-size=1280,800',
+        ...LOW_RESOURCE_ARGS
       ]
     });
 
@@ -1474,6 +1765,7 @@ async function executeProfileEditOnServer(token, profileData, onProgress) {
     page.setDefaultNavigationTimeout(300000);
 
     await page.setViewport({ width: 1280, height: 800 });
+    await blockHeavyResources(page);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
     const expirationDate = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
@@ -1500,59 +1792,34 @@ async function executeProfileEditOnServer(token, profileData, onProgress) {
     // pouco mais a carregar, os campos (e o botão Salvar) simplesmente não são
     // encontrados, os passos são pulados silenciosamente e a função ainda assim
     // reportava sucesso (nada muda no Twitter, mas nenhum erro aparece).
-    await page.waitForSelector('[data-testid="Profile_Save_Button"]', { timeout: 30000 }).catch(() => {
-      throw new Error('A tela de edição de perfil do Twitter não carregou a tempo (conta pode estar suspensa, bloqueada ou com sessão expirada).');
-    });
+    let profileFormReady = await page.waitForSelector('[data-testid="Profile_Save_Button"]', { timeout: 40000 }).catch(() => null);
+
+    // Não achou de primeira: pode ter sido um travamento pontual (ex: várias
+    // contas abrindo a mesma tela ao mesmo tempo). Faz uma segunda tentativa com
+    // navegação nova antes de desistir, em vez de já reportar erro.
+    if (!profileFormReady) {
+      console.warn('[TwitterEngine] Tela de perfil não carregou na 1ª tentativa, tentando recarregar...');
+      await page.goto('https://x.com/settings/profile', { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
+      await delay(3000);
+      profileFormReady = await page.waitForSelector('[data-testid="Profile_Save_Button"]', { timeout: 40000 }).catch(() => null);
+    }
+
+    if (!profileFormReady) {
+      const diagUrl = await page.url().catch(() => 'desconhecida');
+      const diagTitle = await page.title().catch(() => 'desconhecido');
+      throw new Error(`A tela de edição de perfil do Twitter não carregou a tempo (conta pode estar suspensa, bloqueada ou com sessão expirada). [URL: ${diagUrl} | Título: ${diagTitle}]`);
+    }
 
     onProgress(3, 'Limpando e preenchendo informações de bio, site e localização...', 'running');
 
     // 1. Limpa e Atualiza a BIO (textarea[name="description"])
-    const bioEl = await page.$('textarea[name="description"]');
-    if (bioEl) {
-      await bioEl.click();
-      await page.keyboard.down('Control');
-      await page.keyboard.press('A');
-      await page.keyboard.up('Control');
-      await page.keyboard.press('Backspace');
-      await delay(300);
-
-      if (profileData.bio && profileData.bio.trim()) {
-        await page.keyboard.type(profileData.bio.trim(), { delay: 15 });
-        await delay(500);
-      }
-    }
+    await fillProfileField(page, 'textarea[name="description"]', profileData.bio);
 
     // 2. Limpa e Deixa em Branco a LOCALIZAÇÃO (input[name="location"])
-    const locEl = await page.$('input[name="location"]');
-    if (locEl) {
-      await locEl.click();
-      await page.keyboard.down('Control');
-      await page.keyboard.press('A');
-      await page.keyboard.up('Control');
-      await page.keyboard.press('Backspace');
-      await delay(300);
-
-      if (profileData.location && profileData.location.trim()) {
-        await page.keyboard.type(profileData.location.trim(), { delay: 15 });
-        await delay(500);
-      }
-    }
+    await fillProfileField(page, 'input[name="location"]', profileData.location);
 
     // 3. Limpa e Atualiza o SITE LINK (input[name="url"])
-    const siteEl = await page.$('input[name="url"]');
-    if (siteEl) {
-      await siteEl.click();
-      await page.keyboard.down('Control');
-      await page.keyboard.press('A');
-      await page.keyboard.up('Control');
-      await page.keyboard.press('Backspace');
-      await delay(300);
-
-      if (profileData.siteLink && profileData.siteLink.trim()) {
-        await page.keyboard.type(profileData.siteLink.trim(), { delay: 15 });
-        await delay(500);
-      }
-    }
+    await fillProfileField(page, 'input[name="url"]', profileData.siteLink);
 
     // 3. Upload de Foto de Perfil / Banner (se informados)
     onProgress(5, 'Enviando imagens de avatar/banner...', 'running');
@@ -1561,8 +1828,9 @@ async function executeProfileEditOnServer(token, profileData, onProgress) {
       
       // Upload de Banner
       if (profileData.bannerUrl && fileInputs.length > 0) {
-        const lPath = await ensureLocalMediaFile(profileData.bannerUrl);
+        const { path: lPath, isFreshDownload } = await ensureLocalMediaFile(profileData.bannerUrl);
         if (lPath && fs.existsSync(lPath)) {
+          if (isFreshDownload) downloadedMediaPaths.push(lPath);
           await fileInputs[0].uploadFile(lPath);
           await delay(2000);
           const applyBtn = await page.$('[data-testid="applyButton"]');
@@ -1573,8 +1841,9 @@ async function executeProfileEditOnServer(token, profileData, onProgress) {
 
       // Upload de Avatar
       if (profileData.avatarUrl && fileInputs.length > 1) {
-        const lPath = await ensureLocalMediaFile(profileData.avatarUrl);
+        const { path: lPath, isFreshDownload } = await ensureLocalMediaFile(profileData.avatarUrl);
         if (lPath && fs.existsSync(lPath)) {
+          if (isFreshDownload) downloadedMediaPaths.push(lPath);
           await fileInputs[1].uploadFile(lPath);
           await delay(2000);
           const applyBtn = await page.$('[data-testid="applyButton"]');
@@ -1587,20 +1856,72 @@ async function executeProfileEditOnServer(token, profileData, onProgress) {
     // 4. Salva as alterações
     onProgress(7, 'Salvando alterações de perfil...', 'running');
     const saveBtnSelector = '[data-testid="Profile_Save_Button"]';
-    const saveBtn = await page.waitForSelector(saveBtnSelector, { timeout: 15000 }).catch(() => null);
-    if (!saveBtn) {
+    // Timeout generoso (era 15s): com várias contas editando o perfil ao mesmo
+    // tempo, a página pode demorar mais que isso para re-renderizar o botão
+    // Salvar após o preenchimento dos campos/upload de imagem, e um timeout
+    // curto gerava falso erro mesmo com a edição ainda válida na tela.
+    let saveBtnExists = await page.waitForSelector(saveBtnSelector, { timeout: 40000 }).then(() => true).catch(() => false);
+
+    // Se não achou o botão, dá mais uma checada rápida antes de desistir —
+    // cobre o caso raro de o seletor ter piscado durante um re-render.
+    if (!saveBtnExists) {
+      await delay(1500);
+      saveBtnExists = !!(await page.$(saveBtnSelector));
+    }
+
+    if (!saveBtnExists) {
+      if (page.url().includes('/login') || page.url().includes('/i/flow/')) {
+        throw new Error('A sessão da conta expirou durante a edição do perfil (redirecionada para tela de login).');
+      }
       throw new Error('Botão "Salvar" não foi encontrado na tela de perfil — a edição não foi salva.');
     }
-    await saveBtn.click();
+
+    // Clica de forma resiliente: busca uma referência NOVA do botão a cada
+    // tentativa em vez de reaproveitar um handle antigo. O React do X pode
+    // re-renderizar o botão entre localizá-lo e clicar nele (mais comum quando
+    // várias contas rodam rápido/em paralelo), e clicar num handle antigo dava
+    // "Node is detached from document" — a edição ficava pronta na tela mas o
+    // clique falhava e nada era salvo.
+    let clicked = false;
+    let clickErr = null;
+    for (let attempt = 1; attempt <= 5 && !clicked; attempt++) {
+      try {
+        const freshBtn = await page.$(saveBtnSelector);
+        if (!freshBtn) { await delay(800); continue; }
+        const isDisabled = await page.evaluate(el => el.getAttribute('aria-disabled') === 'true' || el.disabled, freshBtn).catch(() => false);
+        if (isDisabled) { await delay(800); continue; }
+        await freshBtn.click();
+        clicked = true;
+      } catch (err) {
+        clickErr = err;
+        await delay(800);
+      }
+    }
+
+    if (!clicked) {
+      throw new Error('Não foi possível clicar no botão "Salvar" (elemento instável na tela) — a edição não foi salva.' + (clickErr ? ` Detalhe: ${clickErr.message}` : ''));
+    }
+
     console.log('[TwitterEngine] Botão Salvar Perfil clicado!');
-    await delay(4000);
+
+    // Espera a requisição de salvar (e qualquer coisa disparada por ela)
+    // realmente terminar na rede antes de fechar o navegador. Antes disso era
+    // só um delay fixo de 4s — sob carga, com várias contas editando ao mesmo
+    // tempo, a requisição de salvar podia ainda estar em andamento quando o
+    // navegador fechava: a UI mostrava "clicado com sucesso" mas a mudança
+    // nunca chegava a ser persistida no X (é exatamente o que causava o caso
+    // de "disse que concluiu mas o perfil não mudou").
+    await page.waitForNetworkIdle({ idleTime: 1200, timeout: 20000 }).catch(() => {});
+    await delay(1500);
 
     onProgress(8, '✓ Perfil atualizado com sucesso!', 'completed');
-    await browser.close();
+    await browser.close().catch(() => {});
+    cleanupDownloadedMedia();
     return { success: true };
 
   } catch (err) {
     if (browser) await browser.close().catch(() => {});
+    cleanupDownloadedMedia();
     console.error('[TwitterEngine] Erro ao editar perfil:', err.message);
     onProgress(-1, 'Erro ao editar perfil: ' + err.message, 'error', err.message);
     return { success: false, error: err.message };
@@ -1637,20 +1958,21 @@ async function scrapeRealMetricsFromDOM(tweetUrl, token) {
   let browser = null;
   try {
     const cleanToken = String(token || '').trim();
-    browser = await puppeteer.launch({
+    browser = await launchTrackedBrowser({
       executablePath: getChromeExecutable(),
+      userDataDir: getUniqueProfileDir(),
       headless: 'new',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled'
+        '--disable-blink-features=AutomationControlled',
+        ...LOW_RESOURCE_ARGS
       ]
     });
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
+    await blockHeavyResources(page);
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
     // 1. Abre a página inicial do x.com primeiro para estabelecer o domínio dos cookies
@@ -1721,7 +2043,7 @@ async function scrapeRealMetricsFromDOM(tweetUrl, token) {
       return { viewsText, likesText, rtsText, repliesText, fullText: text };
     });
 
-    await browser.close();
+    await browser.close().catch(() => {});
 
     if (!rawMetrics) return null;
 
@@ -1751,5 +2073,6 @@ module.exports = {
   executeProfileEditOnServer,
   repostTweetOnServer,
   scrapeRealMetricsFromDOM,
-  fetchSingleTweetDataInternal
+  fetchSingleTweetDataInternal,
+  cancelAllActiveSessions
 };
