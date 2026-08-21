@@ -6,6 +6,16 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// Rede de segurança: uma promise rejeitada sem .catch() em qualquer lugar
+// (ex: browser.close() falhando por um arquivo temporário do Chrome travado
+// pelo Windows) derrubava o processo inteiro do servidor, matando todas as
+// postagens/validações em andamento para todo mundo. Loga o erro em vez de
+// crashar — perder a limpeza de um perfil temporário do Chrome é inofensivo,
+// crashar o servidor inteiro por causa disso não é.
+process.on('unhandledRejection', (reason) => {
+  console.error('[Server] Unhandled Rejection (processo continua rodando):', reason && reason.message ? reason.message : reason);
+});
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -34,18 +44,33 @@ const upload = multer({ storage });
 // Servir arquivos estáticos do painel dashboard
 app.use(express.static(path.join(__dirname, 'public')));
 
+const { uploadFileToR2 } = require('./r2');
+
 // API Endpoint: Upload de Mídias pelo Painel (suporta até 100 arquivos para disparo em massa)
-app.post('/api/upload-media', upload.array('files', 100), (req, res) => {
+app.post('/api/upload-media', upload.array('files', 100), async (req, res) => {
   try {
     const files = req.files || [];
-    const fileUrls = files.map(f => {
-      return {
-        url: `/uploads/${f.filename}`,
+    const fileUrls = [];
+
+    for (const f of files) {
+      let publicMediaUrl;
+      try {
+        publicMediaUrl = await uploadFileToR2(f.path, f.originalname, f.mimetype);
+        // Apaga o arquivo local temporario apos salvar com sucesso no Cloudflare R2
+        fs.promises.unlink(f.path).catch(() => {});
+      } catch (r2Err) {
+        console.error('[Upload] Falha no R2, usando fallback local:', r2Err.message);
+        publicMediaUrl = `/uploads/${f.filename}`;
+      }
+
+      fileUrls.push({
+        url: publicMediaUrl,
         name: f.originalname,
         type: f.mimetype,
         size: f.size
-      };
-    });
+      });
+    }
+
     res.json({ success: true, files: fileUrls });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -378,17 +403,17 @@ class Semaphore {
     this.current = 0;
     this.queue = [];
   }
-  acquire() {
+  acquire(clientId) {
     if (this.current < this.max) {
       this.current++;
       return Promise.resolve();
     }
-    return new Promise(resolve => this.queue.push(resolve));
+    return new Promise(resolve => this.queue.push({ resolve, clientId }));
   }
   release() {
     if (this.queue.length > 0) {
       const next = this.queue.shift();
-      next();
+      next.resolve();
     } else {
       this.current--;
     }
@@ -396,16 +421,158 @@ class Semaphore {
 }
 const browserSemaphore = new Semaphore(MAX_CONCURRENT_BROWSERS);
 
-// Executa um trabalho que abre um navegador Puppeteer respeitando o limite global
-// de concorrência. Antes de conseguir uma vaga, avisa a UI que a conta está na fila.
-async function runWithBrowserSlot(clientId, onProgress, fn) {
-  if (browserSemaphore.current >= browserSemaphore.max) {
-    onProgress(0, '⏳ Na fila, aguardando um navegador ficar livre...', 'running');
-  }
-  await browserSemaphore.acquire();
+// Pool DEDICADO e separado só pra validar/testar token de conta nova (ou
+// "Validar Todas") — antes usava o mesmo pool de 8 navegadores da postagem/
+// edição em massa, então adicionar uma conta nova ficava preso em "Validando..."
+// por muito tempo sempre que o painel estivesse ocupado com um disparo grande.
+// Validar é rápido e o usuário costuma estar esperando na hora, então merece
+// prioridade própria em vez de entrar na fila atrás de dezenas de postagens.
+const VALIDATION_CONCURRENCY = 3;
+const validationSemaphore = new Semaphore(VALIDATION_CONCURRENCY);
+async function runWithValidationSlot(fn) {
+  await validationSemaphore.acquire();
   try {
     return await fn();
   } finally {
+    validationSemaphore.release();
+  }
+}
+
+// Valida um token e grava o resultado na conta salva (casada por token, que é
+// sempre único) — usada por "Adicionar Contas", "Validar Todas" e pela
+// recuperação automática de contas presas em "Validando..." ao reiniciar o
+// servidor. Centralizada aqui porque as 3 versões antigas (uma por endpoint)
+// tinham um bug em comum: um catch(_) {} silencioso que, em erro inesperado
+// (não apenas token inválido), NUNCA desligava pendingValidation — a conta
+// ficava mostrando "Validando..." pra sempre, mesmo depois de reiniciar o
+// servidor (o estado fica salvo em disco).
+async function validateAndPersistAccount(token, pass) {
+  let val;
+  try {
+    val = await runWithValidationSlot(() => validateTokenWithTwitter(token));
+  } catch (err) {
+    val = { valid: false, error: err.message };
+  }
+
+  await withAccountsWriteLock(() => {
+    const accs = loadAccountsStore(pass);
+    const idx = accs.findIndex(a => a.token === token);
+    if (idx < 0) return;
+
+    if (val && val.valid) {
+      accs[idx].username = val.username || accs[idx].username;
+      accs[idx].name = val.name || accs[idx].name;
+      accs[idx].avatar = val.avatar || accs[idx].avatar;
+      accs[idx].status = 'Válido';
+      accs[idx].isProtected = val.isProtected === true;
+      accs[idx].unlocked = val.isProtected ? 'Não (🔒 Protegida)' : 'Sim (🔓 Pública)';
+      if (val.followersCount !== undefined) accs[idx].followersCount = val.followersCount;
+    } else {
+      accs[idx].status = (val && (val.status === 'Suspensa' || val.status === 'Bloqueada')) ? 'Suspensa' : 'Inválido';
+      if (val && val.unlocked) accs[idx].unlocked = val.unlocked;
+    }
+    accs[idx].pendingValidation = false;
+    accs[idx].updatedAt = new Date().toISOString();
+    saveAccountsStore(accs, pass);
+  });
+
+  notifyDashboardClientList(pass);
+  return val;
+}
+
+// Valida um lote de tokens em paralelo (respeitando o pool de validação) e
+// avisa o painel do progresso (%, quantos faltam, tempo estimado) a cada
+// conta concluída — sem isso, o usuário só via "Validando e Adicionando N
+// conta(s)..." parado no botão, sem noção de quanto faltava.
+async function validateBatchWithProgress(tokens, pass) {
+  const total = tokens.length;
+  if (total === 0) return;
+  let completed = 0;
+  const startedAt = Date.now();
+
+  broadcastToDashboards({ type: 'VALIDATION_BATCH_PROGRESS', total, completed: 0, percent: 0, etaSeconds: null });
+
+  await Promise.all(tokens.map(async (token) => {
+    await validateAndPersistAccount(token, pass);
+    completed++;
+    const elapsedSec = (Date.now() - startedAt) / 1000;
+    const avgPerAccount = elapsedSec / completed;
+    const etaSeconds = completed < total ? Math.round(avgPerAccount * (total - completed)) : 0;
+    broadcastToDashboards({
+      type: 'VALIDATION_BATCH_PROGRESS',
+      total,
+      completed,
+      percent: Math.round((completed / total) * 100),
+      etaSeconds
+    });
+  }));
+}
+
+// Incrementado toda vez que "Pausar Ações" é acionado. Os laços sequenciais do
+// modo "Postagem Padrão" guardam o valor no início e checam antes de cada
+// conta — se mudou, é porque uma pausa foi pedida enquanto o laço rodava, e
+// ele para em vez de seguir postando nas contas seguintes. Sem isso, pausar
+// só derrubava o navegador da conta atual (que dava erro) mas o laço
+// continuava tentando postar normalmente na próxima conta da lista.
+let dispatchEpoch = 0;
+
+// Guarda os timers de disparos ainda não iniciados (aguardando o atraso entre
+// contas) junto com o clientId de cada um, para o botão "Pausar Ações" do
+// painel conseguir cancelá-los na hora e avisar a UI de quais contas ficaram
+// paradas.
+const pendingDispatchTimers = new Map(); // timerId -> clientId
+function scheduleDispatch(fn, delayMs, clientId) {
+  const timerId = setTimeout(() => {
+    pendingDispatchTimers.delete(timerId);
+    fn();
+  }, delayMs);
+  pendingDispatchTimers.set(timerId, clientId);
+  return timerId;
+}
+
+// Fila simples para serializar leitura+escrita do accounts.json. Validações em
+// paralelo (várias contas ao mesmo tempo) fariam load→modify→save concorrentes
+// nesse arquivo — sem essa fila, uma escrita podia sobrescrever/perder o
+// resultado de outra que terminou quase ao mesmo tempo.
+let accountsWriteLock = Promise.resolve();
+function withAccountsWriteLock(fn) {
+  const result = accountsWriteLock.then(fn, fn);
+  accountsWriteLock = result.catch(() => {});
+  return result;
+}
+
+// Rastreia o que está rodando em cada slot de navegador ocupado agora — usado
+// só para dar uma mensagem de fila útil (o que está rodando, há quanto tempo,
+// e como cancelar) em vez de um "Na fila..." genérico e sem contexto.
+const activeSlotOccupants = new Map(); // clientId -> { label, startedAt }
+const AVG_ACTION_SECONDS = 45; // estimativa grosseira de duração média de 1 ação (post/edição)
+
+// Executa um trabalho que abre um navegador Puppeteer respeitando o limite global
+// de concorrência. Antes de conseguir uma vaga, avisa a UI o que está ocupando
+// os navegadores agora, uma estimativa de espera, e como cancelar pra priorizar.
+async function runWithBrowserSlot(clientId, onProgress, fn, actionLabel = 'uma ação') {
+  if (browserSemaphore.current >= browserSemaphore.max) {
+    const occupants = Array.from(activeSlotOccupants.values());
+    const oldestStart = occupants.length > 0 ? Math.min(...occupants.map(o => o.startedAt)) : Date.now();
+    const elapsedOldestSec = Math.round((Date.now() - oldestStart) / 1000);
+    const etaSec = Math.max(AVG_ACTION_SECONDS - elapsedOldestSec, 5);
+    const summaryList = occupants.slice(0, 3).map(o => {
+      const elapsed = Math.round((Date.now() - o.startedAt) / 1000);
+      return `${o.label} (${elapsed}s atrás)`;
+    });
+    const summary = summaryList.join(', ') + (occupants.length > 3 ? ` e mais ${occupants.length - 3}` : '');
+    onProgress(
+      0,
+      `⏳ Todos os ${browserSemaphore.max} navegadores estão ocupados agora com: ${summary}. Tempo estimado até liberar uma vaga: ~${etaSec}s. Para cancelar o que está em andamento e priorizar esta ação, use "⏸ Pausar Todas as Ações" no Monitor de Atividades.`,
+      'running'
+    );
+  }
+  await browserSemaphore.acquire(clientId);
+  activeSlotOccupants.set(clientId, { label: actionLabel, startedAt: Date.now() });
+  try {
+    return await fn();
+  } finally {
+    activeSlotOccupants.delete(clientId);
     browserSemaphore.release();
   }
 }
@@ -563,6 +730,11 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
         name: nameToUse,
         avatar: existingIdx >= 0 ? updatedList[existingIdx].avatar : '',
         status: existingIdx >= 0 ? updatedList[existingIdx].status : 'Válido',
+        // Marca como "ainda validando" até a checagem real em segundo plano
+        // terminar — sem isso, uma conta nova/suspensa/inválida ficava mostrando
+        // "🟢 Ativa" com nome provisório (acc_XXXXXXXX) indefinidamente enquanto
+        // esperava sua vez na fila de validação.
+        pendingValidation: true,
         followersCount: existingIdx >= 0 ? (updatedList[existingIdx].followersCount || 0) : 0,
         isProtected: existingIdx >= 0 ? (updatedList[existingIdx].isProtected === true) : false,
         unlocked: existingIdx >= 0 ? updatedList[existingIdx].unlocked : 'Sim (🔓 Pública)',
@@ -594,38 +766,12 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
       accounts: updatedList
     });
 
-    // Enriquece nome/avatar das contas em segundo plano de forma assíncrona.
-    // IMPORTANTE: precisa atualizar o status mesmo quando a validação vier
-    // inválida/suspensa — senão a conta fica presa para sempre no nome
-    // provisório (acc_XXXXXXXX) e status "Válido" otimista definidos acima,
-    // mesmo sendo uma conta suspensa ou com token inválido.
-    (async () => {
-      let changed = false;
-      for (let item of parsedTokens) {
-        const cleanToken = item.token;
-        try {
-          const val = await validateTokenWithTwitter(cleanToken);
-          const accs = loadAccountsStore(pass);
-          const idx = accs.findIndex(a => a.token === cleanToken);
-          if (idx < 0) continue;
-
-          if (val && val.valid) {
-            accs[idx].username = val.username || accs[idx].username;
-            accs[idx].name = val.name || accs[idx].name;
-            accs[idx].avatar = val.avatar || accs[idx].avatar;
-            accs[idx].status = 'Válido';
-            accs[idx].isProtected = val.isProtected === true;
-            accs[idx].unlocked = val.isProtected ? 'Não (🔒 Protegida)' : 'Sim (🔓 Pública)';
-          } else {
-            accs[idx].status = (val && val.status === 'Suspensa') ? 'Suspensa' : 'Inválido';
-            if (val && val.unlocked) accs[idx].unlocked = val.unlocked;
-          }
-          saveAccountsStore(accs, pass);
-          changed = true;
-        } catch (_) {}
-      }
-      if (changed) notifyDashboardClientList(pass);
-    })();
+    // Enriquece nome/avatar das contas em segundo plano, EM PARALELO (respeitando
+    // o pool de validação), reportando progresso (%, tempo estimado) ao painel.
+    // IMPORTANTE: atualiza o status mesmo quando a validação vier inválida/
+    // suspensa/erro inesperado — senão a conta ficava presa para sempre como
+    // "Validando..." (era exatamente isso que estava travando várias contas).
+    validateBatchWithProgress(parsedTokens.map(item => item.token), pass);
 
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -634,36 +780,29 @@ app.post('/api/accounts/add-tokens', async (req, res) => {
 
 app.post('/api/accounts/validate-all', async (req, res) => {
   try {
-    const currentAccounts = loadAccountsStore(req.accessPass);
-    for (let acc of currentAccounts) {
-      const val = await validateTokenWithTwitter(acc.token);
-      if (val.status === 'Suspensa' || val.status === 'Bloqueada') {
-        acc.status = 'Suspensa';
-      } else {
-        acc.status = val.valid ? 'Válido' : 'Inválido';
-      }
-      if (val.valid) {
-        acc.username = val.username;
-        acc.name = val.name;
-        acc.avatar = val.avatar;
-        acc.followersCount = val.followersCount;
-        acc.isProtected = val.isProtected === true;
-        acc.unlocked = val.unlocked;
-      }
-      acc.updatedAt = new Date().toISOString();
-    }
-    saveAccountsStore(currentAccounts, req.accessPass);
-    notifyDashboardClientList(req.accessPass);
+    const pass = req.accessPass;
+    const currentAccounts = loadAccountsStore(pass);
+    currentAccounts.forEach(acc => { acc.pendingValidation = true; });
+    saveAccountsStore(currentAccounts, pass);
+    notifyDashboardClientList(pass);
 
     const validCount = currentAccounts.filter(a => a.status === 'Válido').length;
     const suspendedCount = currentAccounts.filter(a => a.status === 'Suspensa' || a.status === 'Bloqueada').length;
     const invalidCount = currentAccounts.filter(a => a.status === 'Inválido').length;
 
+    // Responde imediatamente — com centenas de contas, validar tudo antes de
+    // responder faria a requisição estourar o timeout (e travar o botão "Validar
+    // Todas" indefinidamente sem nunca salvar nada, já que o save só acontecia
+    // no final do laço inteiro).
     res.json({
       success: true,
       metrics: { total: currentAccounts.length, valid: validCount, suspended: suspendedCount, invalid: invalidCount },
       accounts: currentAccounts
     });
+
+    // Valida todas em paralelo (respeitando o pool de validação), reportando
+    // progresso (%, tempo estimado) ao painel.
+    validateBatchWithProgress(currentAccounts.map(acc => acc.token), pass);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -910,8 +1049,26 @@ app.post('/api/results/refresh', async (req, res) => {
   }
 });
 
-// Loop em segundo plano: Atualiza métricas automaticamente a cada 10 minutos
+// Loop em segundo plano: Atualiza métricas automaticamente a cada 10 minutos.
+// Duas proteções importantes que faltavam:
+// 1. autoRefreshRunning: com uma base grande (ex: 1377 posts), um ciclo inteiro
+//    (1 navegador aberto por post, um de cada vez) podia levar bem mais que os
+//    10 minutos do intervalo — sem essa trava, o próximo tick do setInterval
+//    começava OUTRO ciclo por cima do anterior (ainda rodando), empilhando
+//    ciclos sobrepostos indefinidamente.
+// 2. runWithBrowserSlot: antes, cada navegador de métrica era aberto por FORA
+//    do limite de 8 usado por postagem/edição — ou seja, se o usuário já
+//    estivesse usando os 8 navegadores pra postar, esse loop abria um 9º (e um
+//    10º, 11º...) por cima, competindo por CPU/memória e derrubando as
+//    postagens reais em andamento. Agora ele respeita o mesmo limite e fica na
+//    fila atrás de ações do usuário em vez de rodar por cima delas.
+let autoRefreshRunning = false;
 setInterval(async () => {
+  if (autoRefreshRunning) {
+    console.log('[AutoRefresh] Ciclo anterior ainda em andamento, pulando esta rodada.');
+    return;
+  }
+  autoRefreshRunning = true;
   try {
     const allPosts = loadPublishedPostsStore();
     if (allPosts.length === 0) return;
@@ -921,7 +1078,9 @@ setInterval(async () => {
     console.log(`[AutoRefresh] Sincronizando métricas em segundo plano para ${allPosts.length} postagens...`);
     for (let post of allPosts) {
       if (!post.tweetUrl) continue;
-      const domMetrics = await twitterEngine.scrapeRealMetricsFromDOM(post.tweetUrl, validToken);
+      const domMetrics = await runWithBrowserSlot(`autorefresh_${post.tweetUrl}`, () => {}, () =>
+        twitterEngine.scrapeRealMetricsFromDOM(post.tweetUrl, validToken)
+      , 'Sincronização de métricas (segundo plano)').catch(() => null);
       if (domMetrics) {
         post.metrics = {
           views: Math.max(domMetrics.views || 0, post.metrics?.views || 0),
@@ -935,6 +1094,8 @@ setInterval(async () => {
     console.log(`[AutoRefresh] ✓ Métricas de ${allPosts.length} postagens atualizadas no banco de dados com sucesso!`);
   } catch (e) {
     console.error('[AutoRefresh] Erro no loop de sincronização:', e.message);
+  } finally {
+    autoRefreshRunning = false;
   }
 }, 10 * 60 * 1000);
 
@@ -1090,9 +1251,10 @@ function markProfileEdited(idOrToken) {
 // repost do tweet recém-publicado em cada "Conta Mãe" selecionada. Cada conta
 // mãe reporta seu próprio progresso no monitor de atividade, identificada com
 // o prefixo "mother_" para diferenciá-la das contas normais.
-function dispatchMotherReposts(motherAccountIds, tweetUrl, originClientId, savedAccounts) {
-  if (!tweetUrl || !Array.isArray(motherAccountIds) || motherAccountIds.length === 0) return;
+function buildMotherRepostPromises(motherAccountIds, tweetUrl, originClientId, savedAccounts) {
+  if (!tweetUrl || !Array.isArray(motherAccountIds) || motherAccountIds.length === 0) return [];
 
+  const promises = [];
   for (const motherId of motherAccountIds) {
     const motherAcc = savedAccounts.find(a => a.id === motherId);
     if (!motherAcc || !motherAcc.token) continue;
@@ -1115,12 +1277,29 @@ function dispatchMotherReposts(motherAccountIds, tweetUrl, originClientId, saved
       });
     };
 
-    runWithBrowserSlot(progressId, onMotherProgress, () =>
-      twitterEngine.repostTweetOnServer(motherAcc.token, tweetUrl, onMotherProgress)
-    ).catch(err => {
-      console.error(`[Server] Erro no repost da conta mãe @${motherAcc.username}:`, err.message);
-    });
+    promises.push(
+      runWithBrowserSlot(progressId, onMotherProgress, () =>
+        twitterEngine.repostTweetOnServer(motherAcc.token, tweetUrl, onMotherProgress)
+      , `Repost (conta mãe @${motherAcc.username})`).catch(err => {
+        console.error(`[Server] Erro no repost da conta mãe @${motherAcc.username}:`, err.message);
+      })
+    );
   }
+  return promises;
+}
+
+// Modo "fast": dispara os reposts das mães e não espera terminar — a próxima
+// conta do disparo já pode seguir em paralelo.
+function dispatchMotherReposts(motherAccountIds, tweetUrl, originClientId, savedAccounts) {
+  buildMotherRepostPromises(motherAccountIds, tweetUrl, originClientId, savedAccounts);
+}
+
+// Modo "padrão": espera todos os reposts das mães terminarem antes de deixar
+// o chamador seguir pra próxima conta — é o que garante a ordem post→repost→
+// próxima conta, em vez de todas as contas postarem primeiro e os reposts
+// ficarem pra depois (que é o que "fast" faz).
+async function dispatchMotherRepostsAndWait(motherAccountIds, tweetUrl, originClientId, savedAccounts) {
+  await Promise.all(buildMotherRepostPromises(motherAccountIds, tweetUrl, originClientId, savedAccounts));
 }
 
 wss.on('connection', (ws, req) => {
@@ -1214,8 +1393,8 @@ wss.on('connection', (ws, req) => {
 
       // 5. Painel Web solicitou disparo de postagem para contas selecionadas
       if (msg.type === 'DISPATCH_POST') {
-        const { targetClientIds, postData, delayBetweenClientsSec, motherAccountIds = [] } = msg;
-        console.log(`[ws] Disparando postagem para ${targetClientIds.length} conta(s). Stagger: ${delayBetweenClientsSec || 0}s. Contas mães: ${motherAccountIds.length}`);
+        const { targetClientIds, postData, delayBetweenClientsSec, motherAccountIds = [], postMode = 'fast' } = msg;
+        console.log(`[ws] Disparando postagem para ${targetClientIds.length} conta(s). Stagger: ${delayBetweenClientsSec || 0}s. Contas mães: ${motherAccountIds.length}. Modo: ${postMode}.`);
 
         const pass = ws.accessPass || 'adm123';
         const savedAccounts = loadAccountsStore(pass);
@@ -1223,170 +1402,243 @@ wss.on('connection', (ws, req) => {
         // publicado (necessária para que as mães saibam o que repostar).
         const postDataForDispatch = motherAccountIds.length > 0 ? { ...postData, captureUrl: true } : postData;
 
-        for (let i = 0; i < targetClientIds.length; i++) {
-          const cId = targetClientIds[i];
-          const delayMs = (delayBetweenClientsSec || 0) * 1000 * i;
+        const runOneAccount = async (cId) => {
+          let tokenToUse = null;
+          let targetExtClient = null;
 
-          setTimeout(async () => {
-            let tokenToUse = null;
-            let targetExtClient = null;
-
-            if (cId.startsWith('token_')) {
-              const accId = cId.replace('token_', '');
-              const acc = savedAccounts.find(a => a.id === accId || a.token === accId);
-              if (acc) {
-                tokenToUse = acc.token;
-                targetExtClient = Array.from(clientsMap.values()).find(c =>
-                  c.ws && c.ws.readyState === WebSocket.OPEN && c.info?.account?.username && acc.username &&
-                  c.info.account.username.toLowerCase() === acc.username.toLowerCase()
-                );
-              }
-            } else {
-              targetExtClient = clientsMap.get(cId);
-              if (!targetExtClient) {
-                const acc = savedAccounts.find(a => a.id === cId || a.username === cId);
-                if (acc) tokenToUse = acc.token;
-              }
+          if (cId.startsWith('token_')) {
+            const accId = cId.replace('token_', '');
+            const acc = savedAccounts.find(a => a.id === accId || a.token === accId);
+            if (acc) {
+              tokenToUse = acc.token;
+              targetExtClient = Array.from(clientsMap.values()).find(c =>
+                c.ws && c.ws.readyState === WebSocket.OPEN && c.info?.account?.username && acc.username &&
+                c.info.account.username.toLowerCase() === acc.username.toLowerCase()
+              );
             }
-
-            if (targetExtClient && targetExtClient.ws && targetExtClient.ws.readyState === WebSocket.OPEN) {
-              console.log(`[ws] Roteando post diretamente para a extensão ativa da conta: @${targetExtClient.info?.account?.username || cId}`);
-              targetExtClient.ws.send(JSON.stringify({ type: 'EXECUTE_POST', postData: postDataForDispatch }));
-              return;
+          } else {
+            targetExtClient = clientsMap.get(cId);
+            if (!targetExtClient) {
+              const acc = savedAccounts.find(a => a.id === cId || a.username === cId);
+              if (acc) tokenToUse = acc.token;
             }
+          }
 
-            if (tokenToUse) {
-              const onPostProgress = (stepIndex, label, stepStatus, error) => {
-                broadcastToDashboards({
-                  type: 'STEP_UPDATE',
-                  clientId: cId,
-                  stepIndex: stepIndex,
-                  label: label,
-                  stepStatus: stepStatus,
-                  error: error,
-                  overallStatus: stepStatus === 'error' ? 'error' : stepIndex === 8 ? 'completed' : 'running'
+          if (targetExtClient && targetExtClient.ws && targetExtClient.ws.readyState === WebSocket.OPEN) {
+            console.log(`[ws] Roteando post diretamente para a extensão ativa da conta: @${targetExtClient.info?.account?.username || cId}`);
+            targetExtClient.ws.send(JSON.stringify({ type: 'EXECUTE_POST', postData: postDataForDispatch }));
+            return;
+          }
+
+          if (!tokenToUse) return;
+
+          const onPostProgress = (stepIndex, label, stepStatus, error) => {
+            broadcastToDashboards({
+              type: 'STEP_UPDATE',
+              clientId: cId,
+              stepIndex: stepIndex,
+              label: label,
+              stepStatus: stepStatus,
+              error: error,
+              overallStatus: stepStatus === 'error' ? 'error' : stepIndex === 8 ? 'completed' : 'running'
+            });
+          };
+
+          const accForLabel = savedAccounts.find(a => a.id === cId || a.token === tokenToUse || a.username === cId);
+          try {
+            const result = await runWithBrowserSlot(cId, onPostProgress, () =>
+              twitterEngine.executePostOnServer(tokenToUse, postDataForDispatch, onPostProgress)
+            , `Postagem em @${accForLabel ? accForLabel.username : cId}`);
+
+            if (result && result.success) {
+              bumpAccountPostCount(cId, pass);
+              const acc = savedAccounts.find(a => a.id === cId || a.token === tokenToUse);
+              if (result.tweetUrl) {
+                registerPublishedPost({
+                  tweetUrl: result.tweetUrl,
+                  username: acc ? acc.username : cId,
+                  name: acc ? acc.name : '',
+                  avatar: acc ? acc.avatar : '',
+                  caption: postDataForDispatch.text || '',
+                  mediaUrls: postDataForDispatch.mediaUrls || [],
+                  hasVideo: postDataForDispatch.hasVideo !== false
                 });
-              };
-
-              runWithBrowserSlot(cId, onPostProgress, () =>
-                twitterEngine.executePostOnServer(tokenToUse, postDataForDispatch, onPostProgress)
-              ).then(result => {
-                if (result && result.success) {
-                  bumpAccountPostCount(cId, pass);
-                  const acc = savedAccounts.find(a => a.id === cId || a.token === tokenToUse);
-                  if (result.tweetUrl) {
-                    registerPublishedPost({
-                      tweetUrl: result.tweetUrl,
-                      username: acc ? acc.username : cId,
-                      name: acc ? acc.name : '',
-                      avatar: acc ? acc.avatar : '',
-                      caption: postDataForDispatch.text || '',
-                      mediaUrls: postDataForDispatch.mediaUrls || [],
-                      hasVideo: postDataForDispatch.hasVideo !== false
-                    });
-                    dispatchMotherReposts(motherAccountIds, result.tweetUrl, cId, savedAccounts);
-                  } else if (motherAccountIds.length > 0) {
-                    console.warn(`[Server] Não foi possível obter a URL do post de ${cId} — contas mães não vão repostar essa publicação.`);
-                  }
-                } else if (result && result.error && (result.error.includes('suspens') || result.error.includes('bloquead') || result.error.includes('suspended') || result.error.includes('locked'))) {
-                  markAccountStatus(cId, 'Suspensa', pass);
+                // Modo padrão: espera os reposts das mães terminarem antes de
+                // seguir pra próxima conta. Modo fast: dispara e não espera.
+                if (postMode === 'standard') {
+                  await dispatchMotherRepostsAndWait(motherAccountIds, result.tweetUrl, cId, savedAccounts);
+                } else {
+                  dispatchMotherReposts(motherAccountIds, result.tweetUrl, cId, savedAccounts);
                 }
-              }).catch(err => {
-                console.error(`[Server] Erro na postagem de ${cId}:`, err.message);
-                if (err.message && (err.message.includes('suspens') || err.message.includes('bloquead') || err.message.includes('suspended') || err.message.includes('locked'))) {
-                  markAccountStatus(cId, 'Suspensa', pass);
-                }
-              });
+              } else if (motherAccountIds.length > 0) {
+                console.warn(`[Server] Não foi possível obter a URL do post de ${cId} — contas mães não vão repostar essa publicação.`);
+              }
+            } else if (result && result.error && (result.error.includes('suspens') || result.error.includes('bloquead') || result.error.includes('suspended') || result.error.includes('locked'))) {
+              markAccountStatus(cId, 'Suspensa', pass);
             }
-          }, delayMs);
+          } catch (err) {
+            console.error(`[Server] Erro na postagem de ${cId}:`, err.message);
+            if (err.message && (err.message.includes('suspens') || err.message.includes('bloquead') || err.message.includes('suspended') || err.message.includes('locked'))) {
+              markAccountStatus(cId, 'Suspensa', pass);
+            }
+          }
+        };
+
+        if (postMode === 'standard') {
+          // Pool de workers em paralelo (até MAX_CONCURRENT_BROWSERS por vez,
+          // igual ao modo Fast) — mas cada worker só pega a PRÓXIMA conta da
+          // fila depois de terminar o post + os reposts das mães da conta
+          // anterior. Isso mantém a mesma velocidade "8 em 8" de antes, sem
+          // perder a ordem post→repost de cada conta (que era o ponto do modo
+          // Padrão) — só o modo 100% sequencial (1 por vez) foi trocado por isso.
+          const myEpoch = dispatchEpoch;
+          const concurrency = Math.min(MAX_CONCURRENT_BROWSERS, targetClientIds.length);
+          let nextIndex = 0;
+          const worker = async () => {
+            while (true) {
+              if (myEpoch !== dispatchEpoch) {
+                console.log('[Server] Worker de postagem (modo Padrão) interrompido por Pausar Ações.');
+                break;
+              }
+              const i = nextIndex++;
+              if (i >= targetClientIds.length) break;
+              await runOneAccount(targetClientIds[i]);
+              if (delayBetweenClientsSec > 0 && nextIndex < targetClientIds.length) {
+                await new Promise(r => setTimeout(r, delayBetweenClientsSec * 1000));
+              }
+            }
+          };
+          Promise.all(Array.from({ length: concurrency }, worker));
+        } else {
+          targetClientIds.forEach((cId, i) => {
+            const delayMs = (delayBetweenClientsSec || 0) * 1000 * i;
+            scheduleDispatch(() => runOneAccount(cId), delayMs, cId);
+          });
         }
         return;
       }
 
       // 5.5 Painel Web solicitou disparo de postagem EM MASSA (Várias mídias e legendas para várias contas)
       if (msg.type === 'DISPATCH_MASS_POST') {
-        const { items, staggerDelay = 0, motherAccountIds = [] } = msg;
+        const { items, staggerDelay = 0, motherAccountIds = [], postMode = 'fast' } = msg;
         if (!Array.isArray(items) || items.length === 0) return;
 
-        console.log(`[ws] Disparando postagem em massa para ${items.length} contas. Stagger: ${staggerDelay}s. Contas mães: ${motherAccountIds.length}`);
+        console.log(`[ws] Disparando postagem em massa para ${items.length} contas. Stagger: ${staggerDelay}s. Contas mães: ${motherAccountIds.length}. Modo: ${postMode}.`);
         const pass = ws.accessPass || 'adm123';
         const savedAccounts = loadAccountsStore(pass);
 
-        (async () => {
-          for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            const acc = savedAccounts.find(a => a.token === item.token || a.id === item.token || a.username === item.username);
-            const tokenToUse = acc ? acc.token : item.token;
-            const clientId = acc ? acc.id : `mass_${i}`;
+        const resolveMassItem = (item, i) => {
+          const acc = savedAccounts.find(a => a.token === item.token || a.id === item.token || a.username === item.username);
+          const tokenToUse = acc ? acc.token : item.token;
+          const clientId = acc ? acc.id : `mass_${i}`;
+          return { acc, tokenToUse, clientId };
+        };
 
-            if (!tokenToUse) continue;
+        const runOneItem = async (item, i) => {
+          const { acc, tokenToUse, clientId } = resolveMassItem(item, i);
 
-            // 1. CHECAGEM PREVENTIVA: Se a conta estiver marcada como Suspensa ou Bloqueada, PULA AUTOMATICAMENTE!
-            if (acc && (acc.status === 'Suspensa' || acc.status === 'Bloqueada')) {
-              console.log(`[MassPost] 🚫 Conta @${acc.username || clientId} está SUSPENSA pelo Twitter. Pulando para a próxima conta...`);
-              broadcastToDashboards({
-                type: 'STEP_UPDATE',
-                clientId: clientId,
-                stepIndex: 0,
-                label: `🚫 Conta @${acc.username || clientId} SUSPENSA pelo Twitter. Pulada automaticamente!`,
-                stepStatus: 'error',
-                error: 'Conta suspensa pelo Twitter (pulada automaticamente)',
-                overallStatus: 'error'
-              });
-              continue; // Pula imediatamente e vai para a próxima conta
-            }
+          if (!tokenToUse) return;
 
-            if (i > 0 && staggerDelay > 0) {
-              console.log(`[Server] Aguardando stagger de ${staggerDelay}s antes da conta ${i + 1}/${items.length}...`);
-              await new Promise(r => setTimeout(r, staggerDelay * 1000));
-            }
-
-            const itemForDispatch = motherAccountIds.length > 0 ? { ...item, captureUrl: true } : item;
-            const onMassPostProgress = (stepIndex, label, stepStatus, error) => {
-              broadcastToDashboards({
-                type: 'STEP_UPDATE',
-                clientId: clientId,
-                stepIndex: stepIndex,
-                label: label,
-                stepStatus: stepStatus,
-                error: error,
-                overallStatus: stepStatus === 'error' ? 'error' : stepIndex === 8 ? 'completed' : 'running'
-              });
-            };
-
-            const result = await runWithBrowserSlot(clientId, onMassPostProgress, () =>
-              twitterEngine.executePostOnServer(tokenToUse, itemForDispatch, onMassPostProgress)
-            ).catch(err => {
-              console.error(`[Server] Erro no post em massa para ${clientId}:`, err.message);
-              if (err.message && (err.message.includes('suspens') || err.message.includes('bloquead') || err.message.includes('suspended') || err.message.includes('locked'))) {
-                markAccountStatus(clientId, 'Suspensa', pass);
-              }
-              return null;
+          // 1. CHECAGEM PREVENTIVA: Se a conta estiver marcada como Suspensa ou Bloqueada, PULA AUTOMATICAMENTE!
+          if (acc && (acc.status === 'Suspensa' || acc.status === 'Bloqueada')) {
+            console.log(`[MassPost] 🚫 Conta @${acc.username || clientId} está SUSPENSA pelo Twitter. Pulando para a próxima conta...`);
+            broadcastToDashboards({
+              type: 'STEP_UPDATE',
+              clientId: clientId,
+              stepIndex: 0,
+              label: `🚫 Conta @${acc.username || clientId} SUSPENSA pelo Twitter. Pulada automaticamente!`,
+              stepStatus: 'error',
+              error: 'Conta suspensa pelo Twitter (pulada automaticamente)',
+              overallStatus: 'error'
             });
+            return; // Pula imediatamente, não bloqueia as demais
+          }
 
-            if (result && result.error && (result.error.includes('suspens') || result.error.includes('bloquead') || result.error.includes('suspended'))) {
+          const itemForDispatch = motherAccountIds.length > 0 ? { ...item, captureUrl: true } : item;
+          const onMassPostProgress = (stepIndex, label, stepStatus, error) => {
+            broadcastToDashboards({
+              type: 'STEP_UPDATE',
+              clientId: clientId,
+              stepIndex: stepIndex,
+              label: label,
+              stepStatus: stepStatus,
+              error: error,
+              overallStatus: stepStatus === 'error' ? 'error' : stepIndex === 8 ? 'completed' : 'running'
+            });
+          };
+
+          const result = await runWithBrowserSlot(clientId, onMassPostProgress, () =>
+            twitterEngine.executePostOnServer(tokenToUse, itemForDispatch, onMassPostProgress)
+          , `Postagem em massa em @${item.username || clientId}`).catch(err => {
+            console.error(`[Server] Erro no post em massa para ${clientId}:`, err.message);
+            if (err.message && (err.message.includes('suspens') || err.message.includes('bloquead') || err.message.includes('suspended') || err.message.includes('locked'))) {
               markAccountStatus(clientId, 'Suspensa', pass);
             }
+            return null;
+          });
 
-            if (result && result.success) {
-              bumpAccountPostCount(clientId, pass);
-              if (result.tweetUrl) {
-                registerPublishedPost({
-                  tweetUrl: result.tweetUrl,
-                  username: acc ? acc.username : item.username || clientId,
-                  name: acc ? acc.name : '',
-                  avatar: acc ? acc.avatar : '',
-                  caption: itemForDispatch.text || itemForDispatch.caption || '',
-                  mediaUrls: itemForDispatch.mediaUrls || [],
-                  hasVideo: itemForDispatch.hasVideo !== false
-                }, pass);
+          if (result && result.error && (result.error.includes('suspens') || result.error.includes('bloquead') || result.error.includes('suspended'))) {
+            markAccountStatus(clientId, 'Suspensa', pass);
+          }
+
+          if (result && result.success) {
+            bumpAccountPostCount(clientId, pass);
+            if (result.tweetUrl) {
+              registerPublishedPost({
+                tweetUrl: result.tweetUrl,
+                username: acc ? acc.username : item.username || clientId,
+                name: acc ? acc.name : '',
+                avatar: acc ? acc.avatar : '',
+                caption: itemForDispatch.text || itemForDispatch.caption || '',
+                mediaUrls: itemForDispatch.mediaUrls || [],
+                hasVideo: itemForDispatch.hasVideo !== false
+              }, pass);
+              // Modo padrão: espera os reposts das mães terminarem antes de
+              // seguir pra próxima conta. Modo fast: dispara e não espera.
+              if (postMode === 'standard') {
+                await dispatchMotherRepostsAndWait(motherAccountIds, result.tweetUrl, clientId, savedAccounts);
+              } else {
                 dispatchMotherReposts(motherAccountIds, result.tweetUrl, clientId, savedAccounts);
-              } else if (motherAccountIds.length > 0) {
-                console.warn(`[Server] Não foi possível obter a URL do post de ${clientId} — contas mães não vão repostar essa publicação.`);
               }
+            } else if (motherAccountIds.length > 0) {
+              console.warn(`[Server] Não foi possível obter a URL do post de ${clientId} — contas mães não vão repostar essa publicação.`);
             }
           }
-        })();
+        };
+
+        if (postMode === 'standard') {
+          // Pool de workers em paralelo (até MAX_CONCURRENT_BROWSERS por vez,
+          // igual ao modo Fast) — cada worker só pega a PRÓXIMA conta da fila
+          // depois de terminar o post + os reposts das mães da conta anterior.
+          // Mantém a mesma velocidade "8 em 8" de antes, sem perder a ordem
+          // post→repost por conta.
+          const myEpoch = dispatchEpoch;
+          const concurrency = Math.min(MAX_CONCURRENT_BROWSERS, items.length);
+          let nextIndex = 0;
+          const worker = async () => {
+            while (true) {
+              if (myEpoch !== dispatchEpoch) {
+                console.log('[Server] Worker de postagem em massa (modo Padrão) interrompido por Pausar Ações.');
+                break;
+              }
+              const i = nextIndex++;
+              if (i >= items.length) break;
+              await runOneItem(items[i], i);
+              if (staggerDelay > 0 && nextIndex < items.length) {
+                await new Promise(r => setTimeout(r, staggerDelay * 1000));
+              }
+            }
+          };
+          Promise.all(Array.from({ length: concurrency }, worker));
+        } else {
+          // Fast: dispara todas em paralelo/escalonado, mães disparadas em
+          // segundo plano assim que cada post individual termina.
+          items.forEach((item, i) => {
+            const { clientId } = resolveMassItem(item, i);
+            const delayMs = (staggerDelay || 0) * 1000 * i;
+            scheduleDispatch(() => runOneItem(item, i), delayMs, clientId);
+          });
+        }
         return;
       }
 
@@ -1396,6 +1648,59 @@ wss.on('connection', (ws, req) => {
         if (client && client.ws.readyState === WebSocket.OPEN) {
           client.ws.send(JSON.stringify({ type: 'CANCEL_POST' }));
         }
+        return;
+      }
+
+      // 6.5 Painel Web pediu para PAUSAR TODAS as ações em andamento (postagem,
+      // disparo em massa, edição de perfil). Cancela tudo que ainda não começou
+      // (aguardando o atraso entre contas ou esperando vaga de navegador livre)
+      // e força o fechamento de qualquer navegador headless já aberto no meio
+      // de uma ação — que é a única forma de parar algo que já está rodando.
+      if (msg.type === 'PAUSE_ALL_ACTIONS') {
+        // Invalida qualquer laço sequencial (modo "Postagem Padrão") em
+        // andamento — ele vai checar isso e parar em vez de seguir pra
+        // próxima conta depois que a atual for interrompida abaixo.
+        dispatchEpoch++;
+
+        const pendingCount = pendingDispatchTimers.size;
+        pendingDispatchTimers.forEach((cId, timerId) => {
+          clearTimeout(timerId);
+          broadcastToDashboards({
+            type: 'STEP_UPDATE',
+            clientId: cId,
+            stepIndex: -1,
+            label: '⏸ Ação pausada pelo usuário antes de começar.',
+            stepStatus: 'error',
+            error: 'Pausado pelo usuário',
+            overallStatus: 'error'
+          });
+        });
+        pendingDispatchTimers.clear();
+
+        const queuedCount = browserSemaphore.queue.length;
+        browserSemaphore.queue.forEach(({ clientId: cId }) => {
+          if (!cId) return;
+          broadcastToDashboards({
+            type: 'STEP_UPDATE',
+            clientId: cId,
+            stepIndex: -1,
+            label: '⏸ Ação pausada pelo usuário (aguardava vaga de navegador).',
+            stepStatus: 'error',
+            error: 'Pausado pelo usuário',
+            overallStatus: 'error'
+          });
+        });
+        browserSemaphore.queue.length = 0;
+
+        const activeCount = twitterEngine.cancelAllActiveSessions();
+
+        console.log(`[ws] ⏸ PAUSA solicitada: ${pendingCount} agendada(s) canceladas, ${queuedCount} na fila descartadas, ${activeCount} em andamento interrompidas.`);
+        broadcastToDashboards({
+          type: 'ACTIONS_PAUSED',
+          pendingCount,
+          queuedCount,
+          activeCount
+        });
         return;
       }
 
@@ -1413,16 +1718,25 @@ wss.on('connection', (ws, req) => {
 
       // 8. Painel Web solicitou edição de perfil (avatar, banner, bio, siteLink)
       if (msg.type === 'DISPATCH_EDIT_PROFILE') {
-        const { targetClientIds, profileData, delayBetweenClientsSec } = msg;
-        console.log(`[ws] Disparando alteração de perfil para ${targetClientIds.length} conta(s).`);
+        const { targetClientIds, profileData } = msg;
+        // O formulário de edição de perfil não tem controle de atraso na UI, então
+        // delayBetweenClientsSec sempre chegava 0/undefined — todas as contas abriam
+        // o navegador e acessavam x.com/settings/profile NO MESMO INSTANTE, a partir
+        // do mesmo IP do servidor. Esse padrão de rajada é reconhecido como tráfego
+        // automatizado suspeito pelo X, que passa a travar/bloquear a tela de
+        // configurações para TODAS as contas (mesmo saudáveis). Forçamos aqui um
+        // atraso mínimo entre o início de cada edição para evitar esse bloqueio.
+        const MIN_PROFILE_EDIT_STAGGER_SEC = 8;
+        const delayBetweenClientsSec = Math.max(msg.delayBetweenClientsSec || 0, MIN_PROFILE_EDIT_STAGGER_SEC);
+        console.log(`[ws] Disparando alteração de perfil para ${targetClientIds.length} conta(s). Stagger: ${delayBetweenClientsSec}s.`);
 
         const savedAccounts = loadAccountsStore();
 
         for (let i = 0; i < targetClientIds.length; i++) {
           const cId = targetClientIds[i];
-          const delayMs = (delayBetweenClientsSec || 0) * 1000 * i;
+          const delayMs = delayBetweenClientsSec * 1000 * i;
 
-          setTimeout(async () => {
+          scheduleDispatch(async () => {
             let tokenToUse = null;
             if (cId.startsWith('token_')) {
               const accId = cId.replace('token_', '');
@@ -1452,15 +1766,16 @@ wss.on('connection', (ws, req) => {
                 });
               };
 
+              const accForLabel = savedAccounts.find(a => a.id === cId || a.token === tokenToUse || a.username === cId);
               runWithBrowserSlot(cId, onProfileProgress, () =>
                 twitterEngine.executeProfileEditOnServer(tokenToUse, profileData, onProfileProgress)
-              ).then(result => {
+              , `Edição de perfil de @${accForLabel ? accForLabel.username : cId}`).then(result => {
                 if (result && result.success) markProfileEdited(cId);
               }).catch(err => {
                 console.error(`[Server] Erro na edição de perfil de ${cId}:`, err.message);
               });
             }
-          }, delayMs);
+          }, delayMs, cId);
         }
         return;
       }
@@ -1496,10 +1811,26 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+// Contas presas em "Validando..." (pendingValidation: true) que ficam salvas
+// assim no accounts.json — normalmente porque o servidor foi reiniciado (ou
+// travou) no meio da validação delas. Sem isso, ficavam presas nesse estado
+// pra sempre, já que nada nunca voltava pra desligar a flag. Roda uma vez ao
+// iniciar o servidor, pra cada arquivo de contas (admin e usuário).
+function recoverStuckValidations() {
+  for (const pass of ['adm123', 'user123']) {
+    const accs = loadAccountsStore(pass);
+    const stuck = accs.filter(a => a.pendingValidation === true);
+    if (stuck.length === 0) continue;
+    console.log(`[Server] 🔄 Recuperando ${stuck.length} conta(s) presa(s) em "Validando..." (${pass})...`);
+    validateBatchWithProgress(stuck.map(a => a.token), pass);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`=======================================================`);
   console.log(`🚀 Painel Web Central rodando em: http://localhost:${PORT}`);
   console.log(`⚡ WebSocket Server pronto em: ws://localhost:${PORT}`);
   console.log(`=======================================================`);
+  recoverStuckValidations();
 });

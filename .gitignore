@@ -8,5 +8,10 @@ server/public/uploads/*
 *.log
 .DS_Store
 
+# Environment files
+.env
+server/.env
+*.env
+
 # Temporary scratch files
 scratch/
